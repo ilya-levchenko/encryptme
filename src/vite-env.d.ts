@@ -4,7 +4,7 @@ type DiaryEntry = {
   id: string;
   date: string;
   title: string;
-  content: string;
+  content?: string;
   mood: 'calm' | 'good' | 'bright' | 'heavy' | 'none';
   createdAt: string;
   updatedAt: string;
@@ -17,6 +17,7 @@ interface Window {
     status(): Promise<{ initialized: boolean }>;
     initialize(input: { username: string; realPassword: string; decoyPassword: string }): Promise<{ ok: boolean }>;
     unlock(input: { username: string; password: string }): Promise<{ sessionId: string; data: VaultData }>;
+    loadEntry(input: { sessionId: string; id: string }): Promise<{ id: string; content: string }>;
     save(input: { sessionId: string; data: VaultData }): Promise<{ savedAt: string }>;
     lock(): Promise<{ ok: boolean }>;
     exportBackup(input: { sessionId: string }): Promise<{ canceled: boolean; fileName?: string; exportedAt?: string; fallback?: boolean }>;

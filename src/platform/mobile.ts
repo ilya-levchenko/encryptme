@@ -2,12 +2,13 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { decryptContainer, encryptContainer, isEncryptedContainer, secureEqual, type EncryptedContainer, usernameDigest } from './crypto';
+import { decryptBlob, decryptContainer, deriveKey, encryptBlob, encryptContainer, fromBase64, isEncryptedContainer, isSplitContainer, isVaultContainer, secureEqual, type EncryptedContainer, type SplitContainer, toBase64, usernameDigest } from './crypto';
 import { vaultStorage } from './storage';
 
 type Profile = { version: 1; usernameHash: string; slots: ['a', 'b'] };
-type Session = { id: string; slot: 'a' | 'b'; password: string; salt: Uint8Array; data: VaultData };
-type BackupPayload = { format: 'encryptme-backup-payload'; version: 1; exportedAt: string; profile: Profile; vaults: Record<'a' | 'b', EncryptedContainer> };
+type Session = { id: string; slot: 'a' | 'b'; password: string; key: CryptoKey; container: SplitContainer; data: VaultData };
+type VaultContainer = EncryptedContainer | SplitContainer;
+type BackupPayload = { format: 'encryptme-backup-payload'; version: 1; exportedAt: string; profile: Profile; vaults: Record<'a' | 'b', VaultContainer> };
 type BackupDocument = { format: 'encryptme-backup'; version: 1; encrypted: EncryptedContainer };
 
 const profilePath = 'vault/profile.json';
@@ -32,6 +33,38 @@ const blankVault = (decoy = false): VaultData => {
   };
 };
 
+const withoutContent = ({ content: _content, ...entry }: DiaryEntry) => entry;
+
+async function createSplitVault(data: VaultData, password: string, existingSalt?: Uint8Array) {
+  const salt = existingSalt || crypto.getRandomValues(new Uint8Array(16));
+  const key = await deriveKey(password, salt);
+  const entries = Object.fromEntries(await Promise.all(data.entries.map(async entry => [entry.id, await encryptBlob({ content: entry.content || '' }, key)] as const)));
+  const indexData: VaultData = { ...data, version: 2, updatedAt: new Date().toISOString(), entries: data.entries.map(withoutContent) };
+  const container: SplitContainer = { version: 2, kdf: 'scrypt-32768-8-1', salt: toBase64(salt), index: await encryptBlob(indexData, key), entries };
+  return { container, key, data: indexData };
+}
+
+async function openSplitVault(container: SplitContainer, password: string) {
+  const key = await deriveKey(password, fromBase64(container.salt));
+  const data = await decryptBlob<VaultData>(container.index, key);
+  if (!Array.isArray(data.entries)) throw new Error('INVALID_VAULT');
+  return { key, data: { ...data, entries: data.entries.map(withoutContent) } };
+}
+
+async function updateSplitVault(active: Session, snapshot: VaultData) {
+  const previous = new Map(active.data.entries.map(entry => [entry.id, entry]));
+  const entries: SplitContainer['entries'] = {};
+  for (const entry of snapshot.entries) {
+    const old = previous.get(entry.id);
+    if (typeof entry.content === 'string' && (!old || entry.content !== old.content || !active.container.entries[entry.id])) {
+      entries[entry.id] = await encryptBlob({ content: entry.content }, active.key);
+    } else if (active.container.entries[entry.id]) entries[entry.id] = active.container.entries[entry.id];
+    else throw new Error('ENTRY_CONTENT_MISSING');
+  }
+  const data: VaultData = { ...snapshot, version: 2, updatedAt: new Date().toISOString(), entries: snapshot.entries.map(withoutContent) };
+  return { container: { ...active.container, index: await encryptBlob(data, active.key), entries }, data };
+}
+
 function assertSession(sessionId: string) {
   if (!session || session.id !== sessionId) throw new Error('LOCKED');
   return session;
@@ -48,7 +81,7 @@ function validPayload(value: unknown): value is BackupPayload {
   if (!value || typeof value !== 'object') return false;
   const payload = value as Partial<BackupPayload>;
   return payload.format === 'encryptme-backup-payload' && payload.version === 1 && typeof payload.exportedAt === 'string' && validProfile(payload.profile)
-    && Boolean(payload.vaults) && isEncryptedContainer(payload.vaults?.a) && isEncryptedContainer(payload.vaults?.b);
+    && Boolean(payload.vaults) && isVaultContainer(payload.vaults?.a) && isVaultContainer(payload.vaults?.b);
 }
 
 async function chooseBackupFile() {
@@ -103,8 +136,8 @@ export function createMobileBridge(): Window['encryptMe'] {
       const decoyPassword = String(input.decoyPassword || '');
       if (username.length < 2 || realPassword.length < 10 || decoyPassword.length < 10 || realPassword === decoyPassword) throw new Error('INVALID_SETUP');
       const slots: ['a' | 'b', 'a' | 'b'] = crypto.getRandomValues(new Uint8Array(1))[0] % 2 ? ['a', 'b'] : ['b', 'a'];
-      const [real, decoy] = await Promise.all([encryptContainer(blankVault(), realPassword), encryptContainer(blankVault(true), decoyPassword)]);
-      await Promise.all([vaultStorage.write(vaultPath(slots[0]), real), vaultStorage.write(vaultPath(slots[1]), decoy)]);
+      const [real, decoy] = await Promise.all([createSplitVault(blankVault(), realPassword), createSplitVault(blankVault(true), decoyPassword)]);
+      await Promise.all([vaultStorage.write(vaultPath(slots[0]), real.container), vaultStorage.write(vaultPath(slots[1]), decoy.container)]);
       await vaultStorage.write<Profile>(profilePath, { version: 1, usernameHash: await usernameDigest(username), slots: ['a', 'b'] });
       return { ok: true };
     },
@@ -113,13 +146,32 @@ export function createMobileBridge(): Window['encryptMe'] {
       const profile = await vaultStorage.read<Profile>(profilePath);
       const usernameOk = secureEqual(await usernameDigest(String(input.username || '')), profile.usernameHash);
       const attempts = await Promise.all(profile.slots.map(async slot => {
-        try { return { slot, ...(await decryptContainer<VaultData>(await vaultStorage.read<EncryptedContainer>(vaultPath(slot)), String(input.password || ''))) }; }
+        let stored: VaultContainer;
+        try { stored = await vaultStorage.read<VaultContainer>(vaultPath(slot)); }
         catch { return null; }
+        if (isSplitContainer(stored)) {
+          try { return { slot, container: stored, ...(await openSplitVault(stored, String(input.password || ''))) }; }
+          catch { return null; }
+        }
+        let legacy;
+        try { legacy = await decryptContainer<VaultData>(stored, String(input.password || '')); }
+        catch { return null; }
+        const migrated = await createSplitVault(legacy.data, String(input.password || ''), legacy.salt);
+        await vaultStorage.write(vaultPath(slot), migrated.container);
+        return { slot, container: migrated.container, key: migrated.key, data: migrated.data };
       }));
       const match = usernameOk ? attempts.find(Boolean) : null;
       if (!match) { await new Promise(resolve => window.setTimeout(resolve, 350)); throw new Error('INVALID_CREDENTIALS'); }
-      session = { id: crypto.randomUUID(), slot: match.slot, password: String(input.password), salt: match.salt, data: match.data };
+      session = { id: crypto.randomUUID(), slot: match.slot, password: String(input.password), key: match.key, container: match.container, data: match.data };
       return { sessionId: session.id, data: session.data };
+    },
+
+    async loadEntry(input) {
+      const active = assertSession(input.sessionId);
+      if (!active.data.entries.some(entry => entry.id === input.id)) throw new Error('ENTRY_NOT_FOUND');
+      const value = await decryptBlob<{ content: string }>(active.container.entries[input.id], active.key);
+      active.data = { ...active.data, entries: active.data.entries.map(entry => entry.id === input.id ? { ...entry, content: value.content || '' } : entry) };
+      return { id: input.id, content: value.content || '' };
     },
 
     async save(input) {
@@ -127,8 +179,10 @@ export function createMobileBridge(): Window['encryptMe'] {
       const snapshot = structuredClone(input.data);
       const operation = saveChain.then(async () => {
         if (session !== active) throw new Error('LOCKED');
-        await vaultStorage.write(vaultPath(active.slot), await encryptContainer(snapshot, active.password, active.salt));
-        active.data = snapshot;
+        const updated = await updateSplitVault(active, snapshot);
+        await vaultStorage.write(vaultPath(active.slot), updated.container);
+        active.container = updated.container;
+        active.data = { ...snapshot, version: updated.data.version, updatedAt: updated.data.updatedAt };
         return { savedAt: new Date().toISOString() };
       });
       saveChain = operation.then(() => undefined, () => undefined);

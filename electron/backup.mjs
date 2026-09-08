@@ -16,6 +16,15 @@ function isEncryptedContainer(value) {
     && ['salt', 'iv', 'tag', 'ciphertext'].every(key => typeof value[key] === 'string' && value[key].length > 0);
 }
 
+function isVaultContainer(value) {
+  return isEncryptedContainer(value) || (isRecord(value)
+    && value.version === 2
+    && value.kdf === 'scrypt-32768-8-1'
+    && typeof value.salt === 'string'
+    && isRecord(value.index)
+    && isRecord(value.entries));
+}
+
 function isProfile(value) {
   return isRecord(value)
     && value.version === 1
@@ -33,8 +42,8 @@ function validatePayload(payload) {
     || typeof payload.exportedAt !== 'string'
     || !isProfile(payload.profile)
     || !isRecord(payload.vaults)
-    || !isEncryptedContainer(payload.vaults.a)
-    || !isEncryptedContainer(payload.vaults.b)) {
+    || !isVaultContainer(payload.vaults.a)
+    || !isVaultContainer(payload.vaults.b)) {
     throw new Error('INVALID_BACKUP');
   }
   return payload;

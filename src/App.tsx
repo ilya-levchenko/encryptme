@@ -3,10 +3,10 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Italic,
   Download, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
-  Redo2, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Underline, Undo2, Upload, X, EyeOff
+  Redo2, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, X, EyeOff
 } from 'lucide-react';
 import {
-  addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay,
+  addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay,
   isSameMonth, isToday, parseISO, startOfMonth, startOfWeek, subMonths
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -24,7 +24,18 @@ const moods: { id: DiaryEntry['mood']; label: string; dot: string }[] = [
 const todayKey = () => format(new Date(), 'yyyy-MM-dd');
 const uid = () => crypto.randomUUID();
 const emptyData = (): VaultData => ({ version: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), entries: [], settings: { autoLockMs: IDLE_TIMEOUT_MS } });
-const plainText = (html: string) => { const d = document.createElement('div'); d.innerHTML = html; return d.textContent || ''; };
+const plainText = (html = '') => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.body.querySelectorAll('br').forEach(node => node.replaceWith('\n'));
+  doc.body.querySelectorAll('p,div,li,blockquote').forEach(node => node.append(' '));
+  return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+};
+const countWords = (html = '') => {
+  const text = plainText(html);
+  if (!text) return 0;
+  if ('Segmenter' in Intl) return [...new Intl.Segmenter('ru', { granularity: 'word' }).segment(text)].filter(part => part.isWordLike).length;
+  return (text.match(/[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*/gu) || []).length;
+};
 const sanitize = (html: string) => {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const allowed = new Set(['P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'DIV', 'SPAN']);
@@ -53,6 +64,22 @@ export function App() {
 
   useEffect(() => { window.encryptMe.status().then(s => setScreen(s.initialized ? 'login' : 'setup')).catch(() => setScreen('setup')); }, []);
   useEffect(() => { latestData.current = data; }, [data]);
+
+  useEffect(() => {
+    if (screen !== 'diary' || !sessionId || !activeId) return;
+    const entry = latestData.current.entries.find(item => item.id === activeId);
+    if (!entry || typeof entry.content === 'string') return;
+    let cancelled = false;
+    window.encryptMe.loadEntry({ sessionId, id: activeId }).then(({ content }) => {
+      if (cancelled) return;
+      setData(current => {
+        const next = { ...current, entries: current.entries.map(item => item.id === activeId ? { ...item, content } : item) };
+        latestData.current = next;
+        return next;
+      });
+    }).catch(() => { if (!cancelled) setSaveState('error'); });
+    return () => { cancelled = true; };
+  }, [screen, sessionId, activeId]);
 
   const queueSave = useCallback((next: VaultData) => {
     latestData.current = next; setData(next); setSaveState('saving'); setLastAutoLockMs(normalizeAutoLockMs(next.settings?.autoLockMs));
@@ -218,7 +245,7 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     catch { setBackupState('error'); }
   };
   return <main className="app-shell">
-    <header className="mobile-header"><button onClick={() => setMobileNav(true)} aria-label="Меню"><Menu /></button><Brand /><SaveIndicator state={saveState} /></header>
+    <header className="mobile-header"><div className="mobile-header-actions"><button onClick={() => setMobileNav(true)} aria-label="Меню"><Menu /></button><button onClick={() => setSettingsOpen(true)} aria-label="Настройки"><Settings2 /></button></div><Brand /><SaveIndicator state={saveState} /></header>
     <AnimatePresence>{mobileNav && <motion.div className="mobile-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onClick={() => setMobileNav(false)} />}</AnimatePresence>
     <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
       <div className="sidebar-top"><Brand /><button className="icon-button mobile-close" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
@@ -235,7 +262,9 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     </aside>
     <section className="workspace">
       <div className="workspace-bar"><div><CalendarDays size={16}/><span>{format(parseISO(selectedDate), 'd MMMM yyyy', { locale: ru })}</span></div><SaveIndicator state={saveState} /><button className="workspace-icon" onClick={() => setSettingsOpen(true)} title="Настройки" aria-label="Настройки"><Settings2 size={17}/></button><button className="workspace-icon lock-now" onClick={onLock} title="Заблокировать сейчас" aria-label="Заблокировать сейчас"><LockKeyhole size={17}/></button><button className="new-entry" onClick={create}><Plus size={17}/> Новая запись</button></div>
-      <AnimatePresence mode="wait">{active ? <Editor key={active.id} entry={active} onUpdate={update} onDelete={remove} /> : <EmptyEditor date={selectedDate} onCreate={create} />}</AnimatePresence>
+      <DateCarousel selected={selectedDate} entries={data.entries} onDate={onDate} />
+      <MobileDayEntries entries={dayEntries} activeId={activeId} onPick={onActive} onCreate={create} />
+      <AnimatePresence mode="wait">{active ? (typeof active.content === 'string' ? <Editor key={active.id} entry={active} onUpdate={update} onDelete={remove} /> : <EntryLoading key={`loading-${active.id}`} />) : <EmptyEditor date={selectedDate} onCreate={create} />}</AnimatePresence>
     </section>
     <AnimatePresence>{settingsOpen && <motion.div className="settings-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onMouseDown={() => setSettingsOpen(false)}>
       <motion.section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:10,scale:.985}} transition={{duration:.2}} onMouseDown={e => e.stopPropagation()}>
@@ -302,6 +331,32 @@ function Calendar({ month, selected, entries, onMonth, onDate }: { month: Date; 
   </div>;
 }
 
+function DateCarousel({ selected, entries, onDate }: { selected: string; entries: DiaryEntry[]; onDate(date: string): void }) {
+  const carouselRef = useRef<HTMLElement>(null);
+  const selectedDay = parseISO(selected);
+  const dates = Array.from({ length: 9 }, (_, index) => addDays(selectedDay, index - 4));
+  const filled = new Set(entries.map(entry => entry.date));
+  useEffect(() => { carouselRef.current?.querySelector('[aria-current="date"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); }, [selected]);
+  return <nav ref={carouselRef} className="date-carousel" aria-label="Выбор даты">
+    {dates.map(day => {
+      const key = format(day, 'yyyy-MM-dd');
+      return <button key={key} className={key === selected ? 'selected' : ''} onClick={() => onDate(key)} aria-current={key === selected ? 'date' : undefined}>
+        <span>{format(day, 'EEEEE', { locale: ru })}</span><strong>{format(day, 'd')}</strong>{filled.has(key) && <i/>}
+      </button>;
+    })}
+  </nav>;
+}
+
+function MobileDayEntries({ entries, activeId, onPick, onCreate }: { entries: DiaryEntry[]; activeId: string | null; onPick(id: string): void; onCreate(): void }) {
+  return <section className="mobile-day-entries" aria-label="Записи выбранного дня">
+    <div className="mobile-day-label"><span>Записи дня</span><b>{entries.length}</b></div>
+    <div className="mobile-entry-chips">
+      {entries.map(entry => <button key={entry.id} className={entry.id === activeId ? 'active' : ''} onClick={() => onPick(entry.id)}>{entry.title || 'Без названия'}</button>)}
+      <button className="mobile-add-entry" onClick={onCreate}><Plus size={14}/> Добавить</button>
+    </div>
+  </section>;
+}
+
 function EntryRow({ entry, active, onClick }: { entry: DiaryEntry; active: boolean; onClick(): void }) {
   const mood = moods.find(m => m.id === entry.mood)!;
   return <button className={`entry-row ${active ? 'active' : ''}`} onClick={onClick}><i style={{background:mood.dot}}/><div><strong>{entry.title || 'Без названия'}</strong><span>{plainText(entry.content).slice(0, 62) || 'Пустая запись'}</span></div><time>{format(parseISO(entry.updatedAt), 'HH:mm')}</time></button>;
@@ -320,10 +375,35 @@ function EmptyEditor({ date, onCreate }: { date: string; onCreate(): void }) {
   return <motion.div className="empty-editor" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}><div className="empty-orbit"><BookOpen size={28}/></div><span>{format(parseISO(date),'EEEE, d MMMM',{locale:ru})}</span><h2>У этого дня ещё нет истории.</h2><p>Начните с одной мысли — остальное придёт само.</p><button className="primary" onClick={onCreate}><Plus size={17}/> Создать запись</button></motion.div>;
 }
 
+function EntryLoading() {
+  return <motion.div className="entry-loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><span className="loader"/><p>Расшифровываем запись…</p></motion.div>;
+}
+
 function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: Partial<DiaryEntry>): void; onDelete(): void }) {
-  const editorRef = useRef<HTMLDivElement>(null); const [moodOpen, setMoodOpen] = useState(false); const contentRef = useRef(entry.content);
-  useEffect(() => { if (editorRef.current && editorRef.current.innerHTML !== entry.content) editorRef.current.innerHTML = entry.content; contentRef.current = entry.content; }, [entry.id]);
-  const command = (cmd: string, value?: string) => { editorRef.current?.focus(); document.execCommand(cmd, false, value); if (editorRef.current) onUpdate({content:sanitize(editorRef.current.innerHTML)}); };
+  const initialContent = entry.content || '<p><br></p>';
+  const editorRef = useRef<HTMLDivElement>(null); const [moodOpen, setMoodOpen] = useState(false); const contentRef = useRef(initialContent);
+  const historyRef = useRef<string[]>([initialContent]); const historyIndex = useRef(0);
+  useEffect(() => {
+    const html = entry.content || '<p><br></p>';
+    if (editorRef.current && editorRef.current.innerHTML !== html) editorRef.current.innerHTML = html;
+    contentRef.current = html; historyRef.current = [html]; historyIndex.current = 0;
+  }, [entry.id]);
+  const commit = () => {
+    if (!editorRef.current) return;
+    const html = sanitize(editorRef.current.innerHTML);
+    if (html === contentRef.current) return;
+    const history = historyRef.current.slice(0, historyIndex.current + 1);
+    history.push(html);
+    if (history.length > 100) history.shift();
+    historyRef.current = history; historyIndex.current = history.length - 1; contentRef.current = html;
+    onUpdate({ content: html });
+  };
+  const travelHistory = (direction: -1 | 1) => {
+    const index = historyIndex.current + direction;
+    if (index < 0 || index >= historyRef.current.length || !editorRef.current) return;
+    const html = historyRef.current[index]; historyIndex.current = index; contentRef.current = html; editorRef.current.innerHTML = html; editorRef.current.focus(); onUpdate({ content: html });
+  };
+  const command = (cmd: string, value?: string) => { editorRef.current?.focus(); document.execCommand(cmd, false, value); commit(); };
   const toggleSpoiler = () => {
     const editor = editorRef.current; const selection = window.getSelection();
     if (!editor || !selection?.rangeCount || selection.isCollapsed) return;
@@ -340,22 +420,22 @@ function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: 
       spoiler.setAttribute('data-spoiler', 'true'); spoiler.append(fragment); range.insertNode(spoiler);
       range.setStartAfter(spoiler); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
     }
-    onUpdate({ content: sanitize(editor.innerHTML) });
+    commit();
   };
-  const wordCount = plainText(entry.content).trim().split(/\s+/).filter(Boolean).length;
+  const wordCount = countWords(entry.content);
   return <motion.article className="editor" initial={{opacity:0, y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.22}}>
     <div className="editor-meta"><button className="mood-button" onClick={() => setMoodOpen(!moodOpen)}><i style={{background:moods.find(m=>m.id===entry.mood)?.dot}}/>{moods.find(m=>m.id===entry.mood)?.label}<ChevronRight size={14}/></button>
       <AnimatePresence>{moodOpen && <motion.div className="mood-menu" initial={{opacity:0,y:-5}} animate={{opacity:1,y:0}} exit={{opacity:0}}>{moods.map(m => <button key={m.id} onClick={() => {onUpdate({mood:m.id});setMoodOpen(false)}}><i style={{background:m.dot}}/>{m.label}</button>)}</motion.div>}</AnimatePresence>
       <span><Clock3 size={14}/> Изменено {format(parseISO(entry.updatedAt),'HH:mm')}</span></div>
     <input className="title-input" value={entry.title} onChange={e => onUpdate({title:e.target.value.slice(0,140)})} placeholder="Название записи" />
     <div className="toolbar" role="toolbar" aria-label="Форматирование">
-      <Tool icon={<Undo2/>} label="Отменить" onClick={() => command('undo')}/><Tool icon={<Redo2/>} label="Повторить" onClick={() => command('redo')}/><span className="tool-sep"/>
+      <Tool icon={<Undo2/>} label="Отменить" onClick={() => travelHistory(-1)}/><Tool icon={<Redo2/>} label="Повторить" onClick={() => travelHistory(1)}/><span className="tool-sep"/>
       <Tool icon={<Bold/>} label="Жирный" onClick={() => command('bold')}/><Tool icon={<Italic/>} label="Курсив" onClick={() => command('italic')}/><Tool icon={<Underline/>} label="Подчёркнутый" onClick={() => command('underline')}/><Tool icon={<Strikethrough/>} label="Зачёркнутый" onClick={() => command('strikeThrough')}/><span className="tool-sep"/>
       <Tool icon={<List/>} label="Список" onClick={() => command('insertUnorderedList')}/><Tool icon={<ListOrdered/>} label="Нумерованный список" onClick={() => command('insertOrderedList')}/><Tool icon={<Quote/>} label="Цитата" onClick={() => command('formatBlock','blockquote')}/><span className="tool-sep"/>
       <Tool icon={<EyeOff/>} label="Скрыть выделенное" onClick={toggleSpoiler}/>
     </div>
-    <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder="Что хочется сохранить об этом дне?" onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={e => { const html = sanitize(e.currentTarget.innerHTML); contentRef.current=html; onUpdate({content:html}); }} />
-    <footer className="editor-footer"><span>{wordCount} {wordCount === 1 ? 'слово' : wordCount > 1 && wordCount < 5 ? 'слова' : 'слов'}</span><span>{plainText(entry.content).length} знаков</span><button onClick={onDelete}>Удалить запись</button></footer>
+    <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder="Что хочется сохранить об этом дне?" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 1 : -1); } }} onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={commit} />
+    <footer className="editor-footer"><span>{wordCount} {wordCount === 1 ? 'слово' : wordCount > 1 && wordCount < 5 ? 'слова' : 'слов'}</span><span>{plainText(entry.content).length} знаков</span><button className="delete-entry" onClick={onDelete} title="Удалить запись" aria-label="Удалить запись"><Trash2 size={18}/><span>Удалить запись</span></button></footer>
   </motion.article>;
 }
 

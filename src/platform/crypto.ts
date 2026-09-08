@@ -9,10 +9,19 @@ export type EncryptedContainer = {
   ciphertext: string;
 };
 
+export type EncryptedBlob = { iv: string; tag: string; ciphertext: string };
+export type SplitContainer = {
+  version: 2;
+  kdf: 'scrypt-32768-8-1';
+  salt: string;
+  index: EncryptedBlob;
+  entries: Record<string, EncryptedBlob>;
+};
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function toBase64(value: Uint8Array) {
+export function toBase64(value: Uint8Array) {
   let binary = '';
   for (let offset = 0; offset < value.length; offset += 0x8000) {
     binary += String.fromCharCode(...value.subarray(offset, offset + 0x8000));
@@ -20,18 +29,34 @@ function toBase64(value: Uint8Array) {
   return btoa(binary);
 }
 
-function fromBase64(value: string) {
+export function fromBase64(value: string) {
   const binary = atob(value);
   return Uint8Array.from(binary, character => character.charCodeAt(0));
 }
 
-async function deriveKey(password: string, salt: Uint8Array) {
+export async function deriveKey(password: string, salt: Uint8Array) {
   const raw = await scrypt(encoder.encode(password), salt, 32768, 8, 1, 32);
   try {
     return await crypto.subtle.importKey('raw', new Uint8Array(raw).buffer, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
   } finally {
     raw.fill(0);
   }
+}
+
+export async function encryptBlob<T>(data: T, key: CryptoKey): Promise<EncryptedBlob> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, key, encoder.encode(JSON.stringify(data))));
+  const tagOffset = encrypted.length - 16;
+  return { iv: toBase64(iv), tag: toBase64(encrypted.subarray(tagOffset)), ciphertext: toBase64(encrypted.subarray(0, tagOffset)) };
+}
+
+export async function decryptBlob<T>(container: EncryptedBlob, key: CryptoKey): Promise<T> {
+  const ciphertext = fromBase64(container.ciphertext);
+  const tag = fromBase64(container.tag);
+  const encrypted = new Uint8Array(ciphertext.length + tag.length);
+  encrypted.set(ciphertext); encrypted.set(tag, ciphertext.length);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(container.iv), tagLength: 128 }, key, encrypted);
+  return JSON.parse(decoder.decode(plaintext)) as T;
 }
 
 export async function encryptContainer<T extends object>(data: T, password: string, existingSalt?: Uint8Array): Promise<EncryptedContainer> {
@@ -83,4 +108,15 @@ export function isEncryptedContainer(value: unknown): value is EncryptedContaine
   return candidate.version === 1
     && candidate.kdf === 'scrypt-32768-8-1'
     && [candidate.salt, candidate.iv, candidate.tag, candidate.ciphertext].every(item => typeof item === 'string' && item.length > 0);
+}
+
+export function isSplitContainer(value: unknown): value is SplitContainer {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<SplitContainer>;
+  return candidate.version === 2 && candidate.kdf === 'scrypt-32768-8-1' && typeof candidate.salt === 'string'
+    && Boolean(candidate.index) && Boolean(candidate.entries) && typeof candidate.entries === 'object';
+}
+
+export function isVaultContainer(value: unknown): value is EncryptedContainer | SplitContainer {
+  return isEncryptedContainer(value) || isSplitContainer(value);
 }

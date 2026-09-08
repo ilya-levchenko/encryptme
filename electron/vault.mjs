@@ -4,7 +4,8 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
 const scrypt = promisify(scryptCallback);
-const VERSION = 1;
+const LEGACY_VERSION = 1;
+export const SPLIT_VERSION = 2;
 
 export const blankVault = (kind = 'real') => ({
   version: 1,
@@ -25,32 +26,105 @@ export function usernameDigest(username) {
   return createHash('sha256').update(username.trim().toLocaleLowerCase('ru')).digest('hex');
 }
 
-async function derive(password, salt) {
+export async function deriveVaultKey(password, salt) {
   return Buffer.from(await scrypt(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }));
+}
+
+function encryptWithKey(data, key) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(data), 'utf8')), cipher.final()]);
+  return { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') };
+}
+
+function decryptWithKey(container, key) {
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(container.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(container.tag, 'base64'));
+  const plaintext = Buffer.concat([decipher.update(Buffer.from(container.ciphertext, 'base64')), decipher.final()]);
+  return JSON.parse(plaintext.toString('utf8'));
 }
 
 export async function encryptVault(data, password, existingSalt) {
   const salt = existingSalt || randomBytes(16);
   const iv = randomBytes(12);
-  const key = await derive(password, salt);
+  const key = await deriveVaultKey(password, salt);
   try {
     const cipher = createCipheriv('aes-256-gcm', key, iv);
     const plaintext = Buffer.from(JSON.stringify({ ...data, updatedAt: new Date().toISOString() }), 'utf8');
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    return { version: VERSION, kdf: 'scrypt-32768-8-1', salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') };
+    return { version: LEGACY_VERSION, kdf: 'scrypt-32768-8-1', salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') };
   } finally { key.fill(0); }
 }
 
 export async function decryptVault(container, password) {
-  if (!container || container.version !== VERSION) throw new Error('UNSUPPORTED_VAULT');
+  if (!container || container.version !== LEGACY_VERSION) throw new Error('UNSUPPORTED_VAULT');
   const salt = Buffer.from(container.salt, 'base64');
-  const key = await derive(password, salt);
+  const key = await deriveVaultKey(password, salt);
   try {
     const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(container.iv, 'base64'));
     decipher.setAuthTag(Buffer.from(container.tag, 'base64'));
     const plaintext = Buffer.concat([decipher.update(Buffer.from(container.ciphertext, 'base64')), decipher.final()]);
     return { data: JSON.parse(plaintext.toString('utf8')), salt };
   } finally { key.fill(0); }
+}
+
+const withoutContent = ({ content: _content, ...entry }) => entry;
+
+export function isSplitVault(container) {
+  return Boolean(container) && container.version === SPLIT_VERSION && container.kdf === 'scrypt-32768-8-1'
+    && typeof container.salt === 'string' && container.index && typeof container.entries === 'object';
+}
+
+export async function createSplitVault(data, password, existingSalt) {
+  const salt = existingSalt || randomBytes(16);
+  const key = await deriveVaultKey(password, salt);
+  try {
+    const now = new Date().toISOString();
+    const entries = Object.fromEntries(data.entries.map(entry => [entry.id, encryptWithKey({ content: entry.content || '' }, key)]));
+    const indexData = { ...data, version: SPLIT_VERSION, updatedAt: now, entries: data.entries.map(withoutContent) };
+    return { container: { version: SPLIT_VERSION, kdf: 'scrypt-32768-8-1', salt: salt.toString('base64'), index: encryptWithKey(indexData, key), entries }, key: Buffer.from(key), data: indexData };
+  } finally { key.fill(0); }
+}
+
+export async function openSplitVault(container, password) {
+  if (!isSplitVault(container)) throw new Error('UNSUPPORTED_VAULT');
+  const salt = Buffer.from(container.salt, 'base64');
+  const key = await deriveVaultKey(password, salt);
+  try {
+    const data = decryptWithKey(container.index, key);
+    if (!data || !Array.isArray(data.entries)) throw new Error('INVALID_VAULT');
+    return { data: { ...data, entries: data.entries.map(withoutContent) }, salt, key: Buffer.from(key) };
+  } catch (error) {
+    key.fill(0);
+    throw error;
+  }
+}
+
+export function loadSplitEntry(container, key, id) {
+  const encrypted = container.entries?.[id];
+  if (!encrypted) throw new Error('ENTRY_NOT_FOUND');
+  const value = decryptWithKey(encrypted, key);
+  return typeof value?.content === 'string' ? value.content : '';
+}
+
+export function updateSplitVault(container, key, data, previousData) {
+  if (!isSplitVault(container)) throw new Error('UNSUPPORTED_VAULT');
+  const previous = new Map((previousData?.entries || []).map(entry => [entry.id, entry]));
+  const entries = {};
+  for (const entry of data.entries) {
+    const old = previous.get(entry.id);
+    const hasContent = typeof entry.content === 'string';
+    if (hasContent && (!old || entry.content !== old.content || !container.entries[entry.id])) {
+      entries[entry.id] = encryptWithKey({ content: entry.content }, key);
+    } else if (container.entries[entry.id]) {
+      entries[entry.id] = container.entries[entry.id];
+    } else {
+      throw new Error('ENTRY_CONTENT_MISSING');
+    }
+  }
+  const now = new Date().toISOString();
+  const indexData = { ...data, version: SPLIT_VERSION, updatedAt: now, entries: data.entries.map(withoutContent) };
+  return { container: { ...container, index: encryptWithKey(indexData, key), entries }, data: indexData };
 }
 
 export async function writeAtomic(file, payload) {

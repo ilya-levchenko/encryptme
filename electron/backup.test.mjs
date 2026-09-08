@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEncryptedBackup, openEncryptedBackup, writeEncryptedBackupFile } from './backup.mjs';
-import { blankVault, encryptVault, usernameDigest } from './vault.mjs';
+import { blankVault, createSplitVault, encryptVault, usernameDigest } from './vault.mjs';
 
 async function fixture() {
   return {
@@ -34,6 +34,16 @@ describe('encrypted backup', () => {
   it('rejects a different profile name', async () => {
     const backup = await createEncryptedBackup(await fixture(), 'основной пароль 123');
     await expect(openEncryptedBackup(backup, 'основной пароль 123', 'Борис')).rejects.toThrow('BACKUP_PROFILE_MISMATCH');
+  });
+
+  it('backs up split per-entry vaults', async () => {
+    const a = await createSplitVault(blankVault('real'), 'основной пароль 123');
+    const b = await createSplitVault(blankVault('decoy'), 'запасной пароль 456');
+    const source = { profile: { version: 1, usernameHash: usernameDigest('Алекс'), slots: ['a', 'b'] }, vaults: { a: a.container, b: b.container } };
+    const backup = await createEncryptedBackup(source, 'основной пароль 123');
+    const restored = await openEncryptedBackup(backup, 'основной пароль 123', 'Алекс');
+    expect(restored.vaults).toEqual(source.vaults);
+    a.key.fill(0); b.key.fill(0);
   });
 
   it('rejects malformed documents before decrypting', async () => {

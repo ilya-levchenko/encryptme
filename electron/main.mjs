@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, cp, mkdir, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { blankVault, decryptVault, encryptVault, readJson, safeCompareHex, usernameDigest, writeAtomic } from './vault.mjs';
+import { blankVault, createSplitVault, decryptVault, isSplitVault, loadSplitEntry, openSplitVault, readJson, safeCompareHex, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
 import { createEncryptedBackup, openEncryptedBackup, writeEncryptedBackupFile } from './backup.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +44,7 @@ async function exists(file) { try { await access(file); return true; } catch { r
 function assertObject(value) { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_DATA'); }
 function clearSession() {
   if (session) session.password = '\0'.repeat(session.password.length);
+  if (session?.key) session.key.fill(0);
   session = null;
 }
 
@@ -139,8 +140,9 @@ ipcMain.handle('vault:initialize', async (_event, input) => {
   const decoyPassword = String(input?.decoyPassword || '');
   if (username.length < 2 || realPassword.length < 10 || decoyPassword.length < 10 || realPassword === decoyPassword) throw new Error('INVALID_SETUP');
   const slots = randomBytes(1)[0] % 2 ? ['a', 'b'] : ['b', 'a'];
-  const [real, decoy] = await Promise.all([encryptVault(blankVault('real'), realPassword), encryptVault(blankVault('decoy'), decoyPassword)]);
-  await Promise.all([writeAtomic(vaultFile(slots[0]), real), writeAtomic(vaultFile(slots[1]), decoy)]);
+  const [real, decoy] = await Promise.all([createSplitVault(blankVault('real'), realPassword), createSplitVault(blankVault('decoy'), decoyPassword)]);
+  real.key.fill(0); decoy.key.fill(0);
+  await Promise.all([writeAtomic(vaultFile(slots[0]), real.container), writeAtomic(vaultFile(slots[1]), decoy.container)]);
   await writeAtomic(configFile(), { version: 1, usernameHash: usernameDigest(username), slots: ['a', 'b'] });
   return { ok: true };
 });
@@ -151,17 +153,34 @@ ipcMain.handle('vault:unlock', async (_event, input) => {
   const config = await readJson(configFile());
   const usernameOk = await safeCompareHex(usernameDigest(username), config.usernameHash);
   const attempts = await Promise.all(config.slots.map(async slot => {
-    try {
-      const loaded = await readVault(slot);
-      if (!loaded) return null;
-      const result = await decryptVault(loaded.container, password);
-      return { slot, ext: loaded.ext, ...result };
-    } catch { return null; }
+    const loaded = await readVault(slot);
+    if (!loaded) return null;
+    if (isSplitVault(loaded.container)) {
+      try { return { slot, ext: loaded.ext, container: loaded.container, ...(await openSplitVault(loaded.container, password)) }; }
+      catch { return null; }
+    }
+    let legacy;
+    try { legacy = await decryptVault(loaded.container, password); }
+    catch { return null; }
+    const migrated = await createSplitVault(legacy.data, password, legacy.salt);
+    await writeAtomic(vaultFile(slot, loaded.ext), migrated.container);
+    return { slot, ext: loaded.ext, container: migrated.container, data: migrated.data, salt: legacy.salt, key: migrated.key };
   }));
   const match = usernameOk ? attempts.find(Boolean) : null;
+  attempts.filter(attempt => attempt && attempt !== match).forEach(attempt => attempt.key?.fill(0));
   if (!match) { await new Promise(resolve => setTimeout(resolve, 350)); throw new Error('INVALID_CREDENTIALS'); }
-  session = { id: randomBytes(24).toString('hex'), slot: match.slot, fileExt: match.ext, password, salt: match.salt, data: match.data };
+  session = { id: randomBytes(24).toString('hex'), slot: match.slot, fileExt: match.ext, password, salt: match.salt, key: match.key, container: match.container, data: match.data };
   return { sessionId: session.id, data: session.data };
+});
+
+ipcMain.handle('vault:load-entry', async (_event, input) => {
+  if (!session || input?.sessionId !== session.id) throw new Error('LOCKED');
+  const id = String(input?.id || '');
+  const metadata = session.data.entries.find(entry => entry.id === id);
+  if (!metadata) throw new Error('ENTRY_NOT_FOUND');
+  const content = loadSplitEntry(session.container, session.key, id);
+  session.data = { ...session.data, entries: session.data.entries.map(entry => entry.id === id ? { ...entry, content } : entry) };
+  return { id, content };
 });
 
 ipcMain.handle('vault:save', async (_event, input) => {
@@ -170,9 +189,10 @@ ipcMain.handle('vault:save', async (_event, input) => {
   const snapshot = structuredClone(input.data);
   saveChain = saveChain.then(async () => {
     if (!session || input.sessionId !== session.id) throw new Error('LOCKED');
-    const encrypted = await encryptVault(snapshot, session.password, session.salt);
-    await writeAtomic(vaultFile(session.slot, session.fileExt), encrypted);
-    session.data = snapshot;
+    const updated = updateSplitVault(session.container, session.key, snapshot, session.data);
+    await writeAtomic(vaultFile(session.slot, session.fileExt), updated.container);
+    session.container = updated.container;
+    session.data = { ...snapshot, version: updated.data.version, updatedAt: updated.data.updatedAt };
     return { savedAt: new Date().toISOString() };
   });
   return saveChain;
