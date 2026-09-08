@@ -19,7 +19,7 @@ function isEncryptedContainer(value) {
 function isVaultContainer(value) {
   return isEncryptedContainer(value) || (isRecord(value)
     && value.version === 2
-    && value.kdf === 'scrypt-32768-8-1'
+    && (value.kdf === 'scrypt-32768-8-1' || value.kdf === 'pbkdf2-sha256-600000')
     && typeof value.salt === 'string'
     && isRecord(value.index)
     && isRecord(value.entries));

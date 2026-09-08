@@ -186,7 +186,7 @@ function Setup({ onDone, onImport }: { onDone: () => void; onImport: () => void 
       </div>
       {realPassword && realPassword.length < 10 && <div className="hint bad">Основной пароль слишком короткий</div>}
       {decoyPassword && realPassword === decoyPassword && <div className="hint bad">Пароли должны различаться</div>}
-      <div className="secure-note"><ShieldCheck size={18} /><span>AES‑256‑GCM · ключ выводится через scrypt · данные остаются на устройстве</span></div>
+      <div className="secure-note"><ShieldCheck size={18} /><span>AES‑256‑GCM · PBKDF2‑SHA‑256 · данные остаются на устройстве</span></div>
       {error && <div className="form-error">{error}</div>}
       <div className="button-row"><button className="ghost" onClick={() => setStep(0)}>Назад</button><button className="primary" disabled={!valid || busy} onClick={submit}>{busy ? 'Создаём…' : 'Создать сейф'} <Sparkles size={17} /></button></div>
     </>}
@@ -261,7 +261,7 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
       <div className="sidebar-footer"><button onClick={onLock}><LogOut size={17} /> Закрыть сейф</button><button className="auto-lock-status" onClick={() => setSettingsOpen(true)} title="Настроить автоблокировку"><LockKeyhole size={13}/> {getAutoLockLabel(autoLockMs)}</button></div>
     </aside>
     <section className="workspace">
-      <div className="workspace-bar"><div><CalendarDays size={16}/><span>{format(parseISO(selectedDate), 'd MMMM yyyy', { locale: ru })}</span></div><SaveIndicator state={saveState} /><button className="workspace-icon" onClick={() => setSettingsOpen(true)} title="Настройки" aria-label="Настройки"><Settings2 size={17}/></button><button className="workspace-icon lock-now" onClick={onLock} title="Заблокировать сейчас" aria-label="Заблокировать сейчас"><LockKeyhole size={17}/></button><button className="new-entry" onClick={create}><Plus size={17}/> Новая запись</button></div>
+      <div className="workspace-bar"><div><CalendarDays size={16}/><span>{format(parseISO(selectedDate), 'd MMMM yyyy', { locale: ru })}</span></div><SaveIndicator state={saveState} /><button className="workspace-icon" onClick={() => setSettingsOpen(true)} title="Настройки" aria-label="Настройки"><Settings2 size={17}/></button><button className="workspace-icon lock-now" onClick={onLock} title="Заблокировать сейчас" aria-label="Заблокировать сейчас"><LockKeyhole size={17}/></button><button className="new-entry" onClick={create}><Plus size={17}/><span>Новая запись</span></button></div>
       <DateCarousel selected={selectedDate} entries={data.entries} onDate={onDate} />
       <MobileDayEntries entries={dayEntries} activeId={activeId} onPick={onActive} onCreate={create} />
       <AnimatePresence mode="wait">{active ? (typeof active.content === 'string' ? <Editor key={active.id} entry={active} onUpdate={update} onDelete={remove} /> : <EntryLoading key={`loading-${active.id}`} />) : <EmptyEditor date={selectedDate} onCreate={create} />}</AnimatePresence>

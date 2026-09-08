@@ -2,10 +2,10 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { decryptBlob, decryptContainer, deriveKey, encryptBlob, encryptContainer, fromBase64, isEncryptedContainer, isSplitContainer, isVaultContainer, secureEqual, type EncryptedContainer, type SplitContainer, toBase64, usernameDigest } from './crypto';
+import { decryptBlob, decryptContainer, deriveKey, encryptBlob, encryptContainer, FAST_KDF, fromBase64, isEncryptedContainer, isSplitContainer, isVaultContainer, SCRYPT_KDF, secureEqual, type EncryptedContainer, type SplitContainer, toBase64, type VaultKdf, usernameDigest } from './crypto';
 import { vaultStorage } from './storage';
 
-type Profile = { version: 1; usernameHash: string; slots: ['a', 'b'] };
+type Profile = { version: 1; usernameHash: string; slots: ['a', 'b']; kdfSalt?: string; kdf?: VaultKdf };
 type Session = { id: string; slot: 'a' | 'b'; password: string; key: CryptoKey; container: SplitContainer; data: VaultData };
 type VaultContainer = EncryptedContainer | SplitContainer;
 type BackupPayload = { format: 'encryptme-backup-payload'; version: 1; exportedAt: string; profile: Profile; vaults: Record<'a' | 'b', VaultContainer> };
@@ -35,20 +35,30 @@ const blankVault = (decoy = false): VaultData => {
 
 const withoutContent = ({ content: _content, ...entry }: DiaryEntry) => entry;
 
-async function createSplitVault(data: VaultData, password: string, existingSalt?: Uint8Array) {
+async function createSplitVault(data: VaultData, password: string, existingSalt?: Uint8Array, kdf: VaultKdf = FAST_KDF) {
   const salt = existingSalt || crypto.getRandomValues(new Uint8Array(16));
-  const key = await deriveKey(password, salt);
+  const key = await deriveKey(password, salt, kdf);
   const entries = Object.fromEntries(await Promise.all(data.entries.map(async entry => [entry.id, await encryptBlob({ content: entry.content || '' }, key)] as const)));
   const indexData: VaultData = { ...data, version: 2, updatedAt: new Date().toISOString(), entries: data.entries.map(withoutContent) };
-  const container: SplitContainer = { version: 2, kdf: 'scrypt-32768-8-1', salt: toBase64(salt), index: await encryptBlob(indexData, key), entries };
+  const container: SplitContainer = { version: 2, kdf, salt: toBase64(salt), index: await encryptBlob(indexData, key), entries };
   return { container, key, data: indexData };
 }
 
 async function openSplitVault(container: SplitContainer, password: string) {
-  const key = await deriveKey(password, fromBase64(container.salt));
+  const key = await deriveKey(password, fromBase64(container.salt), container.kdf);
+  return { key, data: await openSplitVaultWithKey(container, key) };
+}
+
+async function openSplitVaultWithKey(container: SplitContainer, key: CryptoKey) {
   const data = await decryptBlob<VaultData>(container.index, key);
   if (!Array.isArray(data.entries)) throw new Error('INVALID_VAULT');
-  return { key, data: { ...data, entries: data.entries.map(withoutContent) } };
+  return { ...data, entries: data.entries.map(withoutContent) };
+}
+
+async function rekeySplitVault(container: SplitContainer, oldKey: CryptoKey, newKey: CryptoKey, newSalt: Uint8Array, newKdf: VaultKdf = FAST_KDF) {
+  const entries = Object.fromEntries(await Promise.all(Object.entries(container.entries).map(async ([id, encrypted]) => [id, await encryptBlob(await decryptBlob(encrypted, oldKey), newKey)] as const)));
+  const index = await encryptBlob(await decryptBlob(container.index, oldKey), newKey);
+  return { ...container, kdf: newKdf, salt: toBase64(newSalt), index, entries };
 }
 
 async function updateSplitVault(active: Session, snapshot: VaultData) {
@@ -136,33 +146,67 @@ export function createMobileBridge(): Window['encryptMe'] {
       const decoyPassword = String(input.decoyPassword || '');
       if (username.length < 2 || realPassword.length < 10 || decoyPassword.length < 10 || realPassword === decoyPassword) throw new Error('INVALID_SETUP');
       const slots: ['a' | 'b', 'a' | 'b'] = crypto.getRandomValues(new Uint8Array(1))[0] % 2 ? ['a', 'b'] : ['b', 'a'];
-      const [real, decoy] = await Promise.all([createSplitVault(blankVault(), realPassword), createSplitVault(blankVault(true), decoyPassword)]);
+      const sharedSalt = crypto.getRandomValues(new Uint8Array(16));
+      const [real, decoy] = await Promise.all([createSplitVault(blankVault(), realPassword, sharedSalt), createSplitVault(blankVault(true), decoyPassword, sharedSalt)]);
       await Promise.all([vaultStorage.write(vaultPath(slots[0]), real.container), vaultStorage.write(vaultPath(slots[1]), decoy.container)]);
-      await vaultStorage.write<Profile>(profilePath, { version: 1, usernameHash: await usernameDigest(username), slots: ['a', 'b'] });
+      await vaultStorage.write<Profile>(profilePath, { version: 1, usernameHash: await usernameDigest(username), slots: ['a', 'b'], kdfSalt: toBase64(sharedSalt), kdf: FAST_KDF });
       return { ok: true };
     },
 
     async unlock(input) {
       const profile = await vaultStorage.read<Profile>(profilePath);
       const usernameOk = secureEqual(await usernameDigest(String(input.username || '')), profile.usernameHash);
-      const attempts = await Promise.all(profile.slots.map(async slot => {
-        let stored: VaultContainer;
-        try { stored = await vaultStorage.read<VaultContainer>(vaultPath(slot)); }
+      const password = String(input.password || '');
+      const loadedSlots = (await Promise.all(profile.slots.map(async slot => {
+        try { return { slot, stored: await vaultStorage.read<VaultContainer>(vaultPath(slot)) }; }
         catch { return null; }
-        if (isSplitContainer(stored)) {
-          try { return { slot, container: stored, ...(await openSplitVault(stored, String(input.password || ''))) }; }
-          catch { return null; }
+      }))).filter((item): item is { slot: 'a' | 'b'; stored: VaultContainer } => Boolean(item));
+      let sharedKey: CryptoKey | null = null;
+      let sharedKdf: VaultKdf = profile.kdf || SCRYPT_KDF;
+      let match: { slot: 'a' | 'b'; container: SplitContainer; key: CryptoKey; data: VaultData } | null = null;
+
+      if (profile.kdfSalt) {
+        sharedKdf = profile.kdf || loadedSlots.find(item => isSplitContainer(item.stored) && item.stored.salt === profile.kdfSalt)?.stored.kdf || SCRYPT_KDF;
+        sharedKey = await deriveKey(password, fromBase64(profile.kdfSalt), sharedKdf);
+        for (const { slot, stored } of loadedSlots) {
+          if (!isSplitContainer(stored) || stored.salt !== profile.kdfSalt || stored.kdf !== sharedKdf) continue;
+          try { match = { slot, container: stored, key: sharedKey, data: await openSplitVaultWithKey(stored, sharedKey) }; break; }
+          catch { /* this password belongs to another slot */ }
         }
-        let legacy;
-        try { legacy = await decryptContainer<VaultData>(stored, String(input.password || '')); }
-        catch { return null; }
-        const migrated = await createSplitVault(legacy.data, String(input.password || ''), legacy.salt);
-        await vaultStorage.write(vaultPath(slot), migrated.container);
-        return { slot, container: migrated.container, key: migrated.key, data: migrated.data };
-      }));
-      const match = usernameOk ? attempts.find(Boolean) : null;
+      }
+
+      if (!match) {
+        for (const { slot, stored } of loadedSlots) {
+          if (isSplitContainer(stored) && stored.salt === profile.kdfSalt && stored.kdf === sharedKdf) continue;
+          if (isSplitContainer(stored)) {
+            try { match = { slot, container: stored, ...(await openSplitVault(stored, password)) }; break; }
+            catch { continue; }
+          }
+          let legacy;
+          try { legacy = await decryptContainer<VaultData>(stored, password); }
+          catch { continue; }
+          const migrated = await createSplitVault(legacy.data, password, legacy.salt);
+          await vaultStorage.write(vaultPath(slot), migrated.container);
+          match = { slot, container: migrated.container, key: migrated.key, data: migrated.data };
+          break;
+        }
+      }
+
+      if (!usernameOk) match = null;
       if (!match) { await new Promise(resolve => window.setTimeout(resolve, 350)); throw new Error('INVALID_CREDENTIALS'); }
-      session = { id: crypto.randomUUID(), slot: match.slot, password: String(input.password), key: match.key, container: match.container, data: match.data };
+
+      const targetSalt = fromBase64(profile.kdfSalt || match.container.salt);
+      if (match.container.salt !== toBase64(targetSalt) || match.container.kdf !== FAST_KDF) {
+        const targetKey = sharedKdf === FAST_KDF && sharedKey ? sharedKey : await deriveKey(password, targetSalt, FAST_KDF);
+        const rekeyed = await rekeySplitVault(match.container, match.key, targetKey, targetSalt, FAST_KDF);
+        await vaultStorage.write(vaultPath(match.slot), rekeyed);
+        match = { ...match, key: targetKey, container: rekeyed };
+      }
+      if (profile.kdfSalt !== toBase64(targetSalt) || profile.kdf !== FAST_KDF) {
+        profile.kdfSalt = toBase64(targetSalt); profile.kdf = FAST_KDF;
+        await vaultStorage.write(profilePath, profile);
+      }
+      session = { id: crypto.randomUUID(), slot: match.slot, password, key: match.key, container: match.container, data: match.data };
       return { sessionId: session.id, data: session.data };
     },
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blankVault, createSplitVault, decryptVault, encryptVault, loadSplitEntry, openSplitVault, updateSplitVault, usernameDigest } from './vault.mjs';
+import { blankVault, createSplitVault, decryptVault, deriveVaultKey, encryptVault, FAST_KDF, loadSplitEntry, openSplitVault, openSplitVaultWithKey, rekeySplitVault, updateSplitVault, usernameDigest } from './vault.mjs';
 
 describe('encrypted vault', () => {
   it('round-trips data without leaking plaintext', async () => {
@@ -61,5 +61,19 @@ describe('encrypted vault', () => {
     expect(opened.data.entries.map(entry => entry.title)).toEqual(source.entries.map(entry => entry.title));
     expect(loadSplitEntry(migrated.container, opened.key, source.entries[0].id)).toBe(source.entries[0].content);
     migrated.key.fill(0); opened.key.fill(0);
+  });
+
+  it('rekeys a split vault to the shared salt without changing its contents', async () => {
+    const source = blankVault('decoy');
+    const created = await createSplitVault(source, 'correct horse battery staple');
+    const sharedSalt = Buffer.alloc(16, 7);
+    const sharedKey = await deriveVaultKey('correct horse battery staple', sharedSalt, FAST_KDF);
+    const rekeyed = rekeySplitVault(created.container, created.key, sharedKey, sharedSalt);
+    const opened = openSplitVaultWithKey(rekeyed, sharedKey);
+
+    expect(rekeyed.salt).toBe(sharedSalt.toString('base64'));
+    expect(opened.data.entries.map(entry => entry.title)).toEqual(source.entries.map(entry => entry.title));
+    expect(loadSplitEntry(rekeyed, sharedKey, source.entries[0].id)).toBe(source.entries[0].content);
+    created.key.fill(0); sharedKey.fill(0);
   });
 });

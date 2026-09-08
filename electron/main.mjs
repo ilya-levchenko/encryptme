@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, cp, mkdir, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
-import { blankVault, createSplitVault, decryptVault, isSplitVault, loadSplitEntry, openSplitVault, readJson, safeCompareHex, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
+import { blankVault, createSplitVault, decryptVault, deriveVaultKey, FAST_KDF, isSplitVault, loadSplitEntry, openSplitVault, openSplitVaultWithKey, readJson, rekeySplitVault, safeCompareHex, SCRYPT_KDF, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
 import { createEncryptedBackup, openEncryptedBackup, writeEncryptedBackupFile } from './backup.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,10 +140,11 @@ ipcMain.handle('vault:initialize', async (_event, input) => {
   const decoyPassword = String(input?.decoyPassword || '');
   if (username.length < 2 || realPassword.length < 10 || decoyPassword.length < 10 || realPassword === decoyPassword) throw new Error('INVALID_SETUP');
   const slots = randomBytes(1)[0] % 2 ? ['a', 'b'] : ['b', 'a'];
-  const [real, decoy] = await Promise.all([createSplitVault(blankVault('real'), realPassword), createSplitVault(blankVault('decoy'), decoyPassword)]);
+  const sharedSalt = randomBytes(16);
+  const [real, decoy] = await Promise.all([createSplitVault(blankVault('real'), realPassword, sharedSalt), createSplitVault(blankVault('decoy'), decoyPassword, sharedSalt)]);
   real.key.fill(0); decoy.key.fill(0);
   await Promise.all([writeAtomic(vaultFile(slots[0]), real.container), writeAtomic(vaultFile(slots[1]), decoy.container)]);
-  await writeAtomic(configFile(), { version: 1, usernameHash: usernameDigest(username), slots: ['a', 'b'] });
+  await writeAtomic(configFile(), { version: 1, usernameHash: usernameDigest(username), slots: ['a', 'b'], kdfSalt: sharedSalt.toString('base64'), kdf: FAST_KDF });
   return { ok: true };
 });
 
@@ -152,23 +153,55 @@ ipcMain.handle('vault:unlock', async (_event, input) => {
   if (!await exists(configFile())) throw new Error('NOT_INITIALIZED');
   const config = await readJson(configFile());
   const usernameOk = await safeCompareHex(usernameDigest(username), config.usernameHash);
-  const attempts = await Promise.all(config.slots.map(async slot => {
-    const loaded = await readVault(slot);
-    if (!loaded) return null;
-    if (isSplitVault(loaded.container)) {
-      try { return { slot, ext: loaded.ext, container: loaded.container, ...(await openSplitVault(loaded.container, password)) }; }
-      catch { return null; }
+  const loadedSlots = (await Promise.all(config.slots.map(async slot => ({ slot, loaded: await readVault(slot) })))).filter(item => item.loaded);
+  let sharedKey = null;
+  let sharedKdf = config.kdf || SCRYPT_KDF;
+  let match = null;
+
+  if (config.kdfSalt) {
+    sharedKdf = config.kdf || loadedSlots.find(item => isSplitVault(item.loaded.container) && item.loaded.container.salt === config.kdfSalt)?.loaded.container.kdf || SCRYPT_KDF;
+    sharedKey = await deriveVaultKey(password, Buffer.from(config.kdfSalt, 'base64'), sharedKdf);
+    for (const { slot, loaded } of loadedSlots) {
+      if (!isSplitVault(loaded.container) || loaded.container.salt !== config.kdfSalt || loaded.container.kdf !== sharedKdf) continue;
+      try { match = { slot, ext: loaded.ext, container: loaded.container, ...openSplitVaultWithKey(loaded.container, sharedKey), salt: Buffer.from(config.kdfSalt, 'base64'), key: sharedKey }; break; }
+      catch { /* this password belongs to another slot */ }
     }
-    let legacy;
-    try { legacy = await decryptVault(loaded.container, password); }
-    catch { return null; }
-    const migrated = await createSplitVault(legacy.data, password, legacy.salt);
-    await writeAtomic(vaultFile(slot, loaded.ext), migrated.container);
-    return { slot, ext: loaded.ext, container: migrated.container, data: migrated.data, salt: legacy.salt, key: migrated.key };
-  }));
-  const match = usernameOk ? attempts.find(Boolean) : null;
-  attempts.filter(attempt => attempt && attempt !== match).forEach(attempt => attempt.key?.fill(0));
-  if (!match) { await new Promise(resolve => setTimeout(resolve, 350)); throw new Error('INVALID_CREDENTIALS'); }
+  }
+
+  if (!match) {
+    for (const { slot, loaded } of loadedSlots) {
+      if (isSplitVault(loaded.container) && loaded.container.salt === config.kdfSalt && loaded.container.kdf === sharedKdf) continue;
+      if (isSplitVault(loaded.container)) {
+        try { match = { slot, ext: loaded.ext, container: loaded.container, ...(await openSplitVault(loaded.container, password)) }; break; }
+        catch { continue; }
+      }
+      let legacy;
+      try { legacy = await decryptVault(loaded.container, password); }
+      catch { continue; }
+      const migrated = await createSplitVault(legacy.data, password, legacy.salt);
+      await writeAtomic(vaultFile(slot, loaded.ext), migrated.container);
+      match = { slot, ext: loaded.ext, container: migrated.container, data: migrated.data, salt: legacy.salt, key: migrated.key };
+      break;
+    }
+  }
+
+  if (!usernameOk && match?.key && match.key !== sharedKey) match.key.fill(0);
+  if (!usernameOk) match = null;
+  if (!match) { sharedKey?.fill(0); await new Promise(resolve => setTimeout(resolve, 350)); throw new Error('INVALID_CREDENTIALS'); }
+
+  const targetSalt = Buffer.from(config.kdfSalt || match.container.salt, 'base64');
+  if (match.container.salt !== targetSalt.toString('base64') || match.container.kdf !== FAST_KDF) {
+    const targetKey = sharedKdf === FAST_KDF && sharedKey ? sharedKey : await deriveVaultKey(password, targetSalt, FAST_KDF);
+    const rekeyed = rekeySplitVault(match.container, match.key, targetKey, targetSalt, FAST_KDF);
+    await writeAtomic(vaultFile(match.slot, match.ext), rekeyed);
+    if (match.key !== targetKey) match.key.fill(0);
+    if (sharedKey && sharedKey !== targetKey) sharedKey.fill(0);
+    match.key = targetKey; match.salt = targetSalt; match.container = rekeyed;
+  }
+  if (config.kdfSalt !== targetSalt.toString('base64') || config.kdf !== FAST_KDF) {
+    config.kdfSalt = targetSalt.toString('base64'); config.kdf = FAST_KDF;
+    await writeAtomic(configFile(), config);
+  }
   session = { id: randomBytes(24).toString('hex'), slot: match.slot, fileExt: match.ext, password, salt: match.salt, key: match.key, container: match.container, data: match.data };
   return { sessionId: session.id, data: session.data };
 });
