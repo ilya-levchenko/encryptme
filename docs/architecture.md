@@ -16,6 +16,7 @@ React UI
 - `electron/preload.cjs` предоставляет минимальный IPC API без доступа UI к Node.js.
 - `electron/main.mjs` владеет desktop-сессией и файловой системой.
 - `src/platform/` реализует тот же API для iOS и browser development.
+- `src/platform/haptics.ts` добавляет единый слой тактильной отдачи; на iOS он использует нативный Capacitor Haptics.
 - `ios/` содержит тонкий нативный shell, защиту app-switcher snapshot и настройки Data Protection.
 
 ## Форматы данных
@@ -27,3 +28,5 @@ React UI
 Резервная копия содержит профиль и оба уже зашифрованных сейфа, после чего целиком дополнительно шифруется активным паролем. Это позволяет переносить один файл между desktop и iOS без конвертации.
 
 Browser fallback предназначен только для разработки интерфейса и хранит зашифрованные контейнеры в `localStorage`; production desktop использует Electron, а iOS — Capacitor Filesystem.
+
+Стеклянные поверхности реализованы как progressive enhancement через системное размытие WebKit. Настоящий `UIGlassEffect` относится к нативным UIKit-контролам и не применяется напрямую к DOM внутри `WKWebView`, поэтому интерфейс сохраняет безопасный непрозрачный fallback на старых iOS.

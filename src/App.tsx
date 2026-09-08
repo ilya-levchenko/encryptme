@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Italic,
   Download, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
-  Redo2, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, X, EyeOff
+  Redo2, Save, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, X, EyeOff
 } from 'lucide-react';
 import {
   addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay,
@@ -338,12 +338,12 @@ function DateCarousel({ selected, entries, onDate }: { selected: string; entries
   const filled = new Set(entries.map(entry => entry.date));
   useEffect(() => { carouselRef.current?.querySelector('[aria-current="date"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); }, [selected]);
   return <nav ref={carouselRef} className="date-carousel" aria-label="Выбор даты">
-    {dates.map(day => {
+    <AnimatePresence initial={false} mode="popLayout">{dates.map(day => {
       const key = format(day, 'yyyy-MM-dd');
-      return <button key={key} className={key === selected ? 'selected' : ''} onClick={() => onDate(key)} aria-current={key === selected ? 'date' : undefined}>
+      return <motion.button layout key={key} data-haptic="selection" className={key === selected ? 'selected' : ''} initial={{ opacity: 0, scale: .86 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .86 }} whileTap={{ scale: .9 }} transition={{ type: 'spring', stiffness: 430, damping: 30 }} onClick={() => onDate(key)} aria-current={key === selected ? 'date' : undefined}>
         <span>{format(day, 'EEEEE', { locale: ru })}</span><strong>{format(day, 'd')}</strong>{filled.has(key) && <i/>}
-      </button>;
-    })}
+      </motion.button>;
+    })}</AnimatePresence>
   </nav>;
 }
 
@@ -351,8 +351,8 @@ function MobileDayEntries({ entries, activeId, onPick, onCreate }: { entries: Di
   return <section className="mobile-day-entries" aria-label="Записи выбранного дня">
     <div className="mobile-day-label"><span>Записи дня</span><b>{entries.length}</b></div>
     <div className="mobile-entry-chips">
-      {entries.map(entry => <button key={entry.id} className={entry.id === activeId ? 'active' : ''} onClick={() => onPick(entry.id)}>{entry.title || 'Без названия'}</button>)}
-      <button className="mobile-add-entry" onClick={onCreate}><Plus size={14}/> Добавить</button>
+      {entries.map(entry => <motion.button layout key={entry.id} data-haptic="selection" className={entry.id === activeId ? 'active' : ''} whileTap={{ scale: .94 }} transition={{ type: 'spring', stiffness: 440, damping: 30 }} onClick={() => onPick(entry.id)}>{entry.title || 'Без названия'}</motion.button>)}
+      <motion.button className="mobile-add-entry" whileTap={{ scale: .94 }} onClick={onCreate}><Plus size={14}/> Добавить</motion.button>
     </div>
   </section>;
 }
@@ -367,8 +367,8 @@ function SearchResults({ entries, onPick }: { entries: DiaryEntry[]; onPick(e: D
 }
 
 function SaveIndicator({ state }: { state: SaveState }) {
-  const text = state === 'saving' ? 'Сохраняем…' : state === 'error' ? 'Ошибка сохранения' : state === 'saved' ? 'Сохранено' : 'Все изменения локально';
-  return <div className={`save-state ${state}`}><span/>{text}</div>;
+  const text = state === 'error' ? 'Ошибка' : 'Сохранено';
+  return <div className={`save-state ${state}`}><Save aria-hidden="true"/>{text}</div>;
 }
 
 function EmptyEditor({ date, onCreate }: { date: string; onCreate(): void }) {
@@ -435,7 +435,7 @@ function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: 
       <Tool icon={<EyeOff/>} label="Скрыть выделенное" onClick={toggleSpoiler}/>
     </div>
     <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder="Что хочется сохранить об этом дне?" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 1 : -1); } }} onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={commit} />
-    <footer className="editor-footer"><span>{wordCount} {wordCount === 1 ? 'слово' : wordCount > 1 && wordCount < 5 ? 'слова' : 'слов'}</span><span>{plainText(entry.content).length} знаков</span><button className="delete-entry" onClick={onDelete} title="Удалить запись" aria-label="Удалить запись"><Trash2 size={18}/><span>Удалить запись</span></button></footer>
+    <footer className="editor-footer"><span>{wordCount} {wordCount === 1 ? 'слово' : wordCount > 1 && wordCount < 5 ? 'слова' : 'слов'}</span><span>{plainText(entry.content).length} знаков</span><button data-haptic="warning" className="delete-entry" onClick={onDelete} title="Удалить запись" aria-label="Удалить запись"><Trash2 size={18}/><span>Удалить запись</span></button></footer>
   </motion.article>;
 }
 
