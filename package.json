@@ -1,0 +1,103 @@
+{
+  "name": "encryptme",
+  "version": "1.1.0",
+  "description": "EncryptMe — локальный зашифрованный личный дневник",
+  "author": "Ilya Levchenko",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ilya-levchenko/encryptme.git"
+  },
+  "main": "electron/main.mjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "prebuild": "npm run icon",
+    "build": "tsc -b && vite build",
+    "build:ios": "npm run build && cap sync ios",
+    "open:ios": "cap open ios",
+    "preview": "vite preview",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "icon": "node scripts/build-icon.mjs",
+    "test": "vitest run",
+    "check": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/filesystem": "^8.1.3",
+    "@capacitor/share": "^8.0.1",
+    "date-fns": "^4.4.0",
+    "framer-motion": "^13.1.0",
+    "lucide-react": "^1.31.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "scrypt-js": "^3.0.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/ios": "^8.5.1",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "concurrently": "^10.0.4",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.2",
+    "sharp": "^0.35.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10",
+    "wait-on": "^9.1.0"
+  },
+  "overrides": {
+    "xcode": {
+      "uuid": "^11.1.1"
+    }
+  },
+  "build": {
+    "appId": "com.encryptme.diary",
+    "productName": "EncryptMe",
+    "asar": true,
+    "files": ["dist/**/*", "electron/**/*", "build/icon.ico", "package.json", "!node_modules/**/*"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "perMachine": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "EncryptMe",
+      "uninstallDisplayName": "EncryptMe — зашифрованный дневник",
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "EncryptMe Setup ${version}.${ext}"
+    }
+  }
+}

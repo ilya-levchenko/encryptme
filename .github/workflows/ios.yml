@@ -1,0 +1,136 @@
+name: iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_testflight:
+        description: Upload a signed build to TestFlight
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ipa:
+    name: Build IPA
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      SIGNING_AVAILABLE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 != '' && secrets.IOS_CERTIFICATE_PASSWORD != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test shared encryption
+        run: npm test
+
+      - name: Build and sync native project
+        run: npm run build:ios
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project ios/App/App.xcodeproj -scheme App
+
+      - name: Build unsigned device app
+        if: env.SIGNING_AVAILABLE != 'true'
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-unsigned \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            build
+          mkdir -p artifacts/unsigned/Payload
+          cp -R build/ios-unsigned/Build/Products/Release-iphoneos/App.app artifacts/unsigned/Payload/App.app
+          (cd artifacts/unsigned && zip -qry ../EncryptMe-unsigned.ipa Payload)
+
+      - name: Install signing assets
+        if: env.SIGNING_AVAILABLE == 'true'
+        id: signing
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: scripts/ios/install-signing-assets.sh
+
+      - name: Archive signed app
+        if: env.SIGNING_AVAILABLE == 'true'
+        env:
+          TEAM_ID: ${{ steps.signing.outputs.team_id }}
+          PROFILE_NAME: ${{ steps.signing.outputs.profile_name }}
+          KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/EncryptMe.xcarchive \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            archive
+
+      - name: Export signed IPA
+        if: env.SIGNING_AVAILABLE == 'true'
+        env:
+          TEAM_ID: ${{ steps.signing.outputs.team_id }}
+          PROFILE_NAME: ${{ steps.signing.outputs.profile_name }}
+        run: |
+          cp scripts/ios/ExportOptions.plist build/ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Set :teamID $TEAM_ID" build/ExportOptions.plist
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:com.encryptme.diary string $PROFILE_NAME" build/ExportOptions.plist
+          mkdir -p artifacts/signed
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/EncryptMe.xcarchive \
+            -exportPath artifacts/signed \
+            -exportOptionsPlist build/ExportOptions.plist
+          mv artifacts/signed/*.ipa artifacts/EncryptMe.ipa
+
+      - name: Upload to TestFlight
+        if: env.SIGNING_AVAILABLE == 'true' && inputs.upload_testflight == true
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          test -n "$APP_STORE_CONNECT_API_KEY_ID"
+          test -n "$APP_STORE_CONNECT_ISSUER_ID"
+          test -n "$APP_STORE_CONNECT_API_KEY_BASE64"
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          xcrun altool --upload-app --type ios --file artifacts/EncryptMe.ipa --apiKey "$APP_STORE_CONNECT_API_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.SIGNING_AVAILABLE == 'true' && 'EncryptMe-iOS-signed' || 'EncryptMe-iOS-unsigned' }}
+          path: artifacts/*.ipa
+          if-no-files-found: error
+          retention-days: 14

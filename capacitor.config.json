@@ -1,0 +1,10 @@
+{
+  "appId": "com.encryptme.diary",
+  "appName": "EncryptMe",
+  "webDir": "dist",
+  "ios": {
+    "backgroundColor": "#08111f",
+    "contentInset": "automatic",
+    "preferredContentMode": "mobile"
+  }
+}
