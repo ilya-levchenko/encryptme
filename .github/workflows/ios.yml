@@ -28,7 +28,7 @@ jobs:
     env:
       SIGNING_AVAILABLE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 != '' && secrets.IOS_CERTIFICATE_PASSWORD != '' && secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
