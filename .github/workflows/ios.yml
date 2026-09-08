@@ -128,7 +128,7 @@ jobs:
           xcrun altool --upload-app --type ios --file artifacts/EncryptMe.ipa --apiKey "$APP_STORE_CONNECT_API_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.SIGNING_AVAILABLE == 'true' && 'EncryptMe-iOS-signed' || 'EncryptMe-iOS-unsigned' }}
           path: artifacts/*.ipa
