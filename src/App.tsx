@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Italic,
   Download, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
-  Redo2, Save, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, X, EyeOff
+  Redo2, RefreshCw, Save, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, Wifi, X, EyeOff
 } from 'lucide-react';
 import {
   addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay,
@@ -79,7 +79,7 @@ export function App() {
       });
     }).catch(() => { if (!cancelled) setSaveState('error'); });
     return () => { cancelled = true; };
-  }, [screen, sessionId, activeId]);
+  }, [screen, sessionId, activeId, data.entries]);
 
   const queueSave = useCallback((next: VaultData) => {
     latestData.current = next; setData(next); setSaveState('saving'); setLastAutoLockMs(normalizeAutoLockMs(next.settings?.autoLockMs));
@@ -112,6 +112,25 @@ export function App() {
     setSaveState('saved');
     return window.encryptMe.exportBackup({ sessionId });
   }, [sessionId]);
+
+  const flushForSync = useCallback(async () => {
+    window.clearTimeout(saveTimer.current);
+    setSaveState('saving');
+    await window.encryptMe.save({ sessionId, data: latestData.current });
+    setSaveState('saved');
+  }, [sessionId]);
+
+  const applySyncedData = useCallback((next: VaultData) => {
+    latestData.current = next;
+    setData(next);
+    setActiveId(current => current && next.entries.some(entry => entry.id === current) ? current : null);
+    setLastAutoLockMs(normalizeAutoLockMs(next.settings?.autoLockMs));
+    setSaveState('saved');
+  }, []);
+
+  useEffect(() => window.encryptMe.onWifiSyncUpdated(update => {
+    if (update.sessionId === sessionId) applySyncedData(update.data);
+  }), [sessionId, applySyncedData]);
 
   const finishImport = (username: string) => {
     setKnownUsername(username.trim()); setLockReason(null); setSessionId(''); setData(emptyData()); setActiveId(null); setScreen('login'); setImportOpen(false);
@@ -157,7 +176,10 @@ export function App() {
   return <><Diary data={data} selectedDate={selectedDate} activeId={activeId} saveState={saveState}
     onDate={date => { setSelectedDate(date); const entries = data.entries.filter(e => e.date === date).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)); setActiveId(entries[0]?.id || null); }}
     onActive={setActiveId} onChange={queueSave} onLock={() => void lock('manual')} onExport={exportBackup}
-    onImport={() => void lock('manual').then(() => setImportOpen(true))} onSwitchAccount={() => void switchAccount()} />{importDialog}</>;
+    onImport={() => void lock('manual').then(() => setImportOpen(true))} onSwitchAccount={() => void switchAccount()}
+    onStartWifiSync={async () => { await flushForSync(); return window.encryptMe.startWifiSync({ sessionId }); }}
+    onStopWifiSync={() => window.encryptMe.stopWifiSync()}
+    onConnectWifiSync={async (address, code) => { await flushForSync(); const result = await window.encryptMe.connectWifiSync({ sessionId, address, code }); applySyncedData(result.data); return result; }} />{importDialog}</>;
 }
 
 function Brand() { return <div className="brand"><span className="brand-mark"><MoonStar size={17} /></span><span>EncryptMe</span></div>; }
@@ -230,11 +252,21 @@ type DiaryProps = {
   data: VaultData; selectedDate: string; activeId: string | null; saveState: SaveState;
   onDate(date: string): void; onActive(id: string): void; onChange(data: VaultData): void; onLock(): void;
   onExport(): Promise<{ canceled: boolean; fileName?: string; fallback?: boolean }>; onImport(): void; onSwitchAccount(): void;
+  onStartWifiSync(): Promise<{ addresses: string[]; code: string; expiresAt: string }>; onStopWifiSync(): Promise<{ ok: boolean }>;
+  onConnectWifiSync(address: string, code: string): Promise<{ data: VaultData; stats: WifiSyncStats }>;
 };
 
-function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount }: DiaryProps) {
+function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onConnectWifiSync }: DiaryProps) {
   const [month, setMonth] = useState(parseISO(selectedDate)); const [search, setSearch] = useState(''); const [mobileNav, setMobileNav] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupState, setBackupState] = useState<'idle' | 'exporting' | 'done' | 'fallback' | 'error'>('idle');
+  const [wifiState, setWifiState] = useState<'idle' | 'starting' | 'waiting' | 'syncing' | 'done' | 'error'>('idle');
+  const [wifiHost, setWifiHost] = useState<{ addresses: string[]; code: string; expiresAt: string } | null>(null);
+  const [wifiAddress, setWifiAddress] = useState(''); const [wifiCode, setWifiCode] = useState(''); const [wifiMessage, setWifiMessage] = useState('');
+  useEffect(() => window.encryptMe.onWifiSyncUpdated(update => {
+    const changed = update.stats.received + update.stats.sent + update.stats.deleted;
+    setWifiHost(null); setWifiState('done');
+    setWifiMessage(changed ? `iPhone подключён: синхронизировано изменений — ${changed}.` : 'iPhone подключён: данные уже одинаковые.');
+  }), []);
   const autoLockMs = normalizeAutoLockMs(data.settings?.autoLockMs);
   const dayEntries = useMemo(() => data.entries.filter(e => e.date === selectedDate).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)), [data.entries, selectedDate]);
   const active = data.entries.find(e => e.id === activeId) || null;
@@ -244,11 +276,14 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     onChange({ ...data, entries: [...data.entries, entry] }); onActive(entry.id); setMobileNav(false);
   };
   const update = (patch: Partial<DiaryEntry>) => {
-    if (!active) return; onChange({ ...data, entries: data.entries.map(e => e.id === active.id ? { ...e, ...patch, updatedAt: new Date().toISOString() } : e) });
+    if (!active) return;
+    const tombstones = { ...(data.sync?.tombstones || {}) }; delete tombstones[active.id];
+    onChange({ ...data, sync: { ...data.sync, tombstones }, entries: data.entries.map(e => e.id === active.id ? { ...e, ...patch, updatedAt: new Date().toISOString() } : e) });
   };
   const remove = () => {
     if (!active || !confirm('Удалить эту запись? Это действие нельзя отменить.')) return;
-    const rest = data.entries.filter(e => e.id !== active.id); onChange({ ...data, entries: rest }); onActive(rest.find(e => e.date === selectedDate)?.id || '');
+    const rest = data.entries.filter(e => e.id !== active.id); const deletedAt = new Date().toISOString();
+    onChange({ ...data, entries: rest, sync: { ...data.sync, tombstones: { ...(data.sync?.tombstones || {}), [active.id]: deletedAt } } }); onActive(rest.find(e => e.date === selectedDate)?.id || '');
   };
   const updateAutoLock = (value: number) => onChange({ ...data, settings: { ...data.settings, autoLockMs: normalizeAutoLockMs(value) } });
   const handleExport = async () => {
@@ -256,6 +291,35 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     try { const result = await onExport(); setBackupState(result.canceled ? 'idle' : result.fallback ? 'fallback' : 'done'); }
     catch { setBackupState('error'); }
   };
+  const wifiError = (reason: unknown) => {
+    const message = String(reason);
+    if (message.includes('INVALID_SYNC_CODE')) return 'Код подключения не подошёл.';
+    if (message.includes('SYNC_VAULT_MISMATCH')) return 'На устройствах открыты разные сейфы. Сначала импортируйте одну резервную копию.';
+    if (message.includes('SYNC_TIMEOUT') || message.includes('Failed to fetch')) return 'Компьютер не отвечает. Проверьте Wi‑Fi, адрес и разрешение брандмауэра.';
+    if (message.includes('INVALID_SYNC_ADDRESS')) return 'Введите адрес, показанный на компьютере.';
+    return 'Не удалось выполнить синхронизацию.';
+  };
+  const startWifi = async () => {
+    setWifiState('starting'); setWifiMessage('');
+    try { const host = await onStartWifiSync(); setWifiHost(host); setWifiState('waiting'); }
+    catch (reason) { setWifiMessage(wifiError(reason)); setWifiState('error'); }
+  };
+  const stopWifi = async () => { await onStopWifiSync(); setWifiHost(null); setWifiState('idle'); setWifiMessage(''); };
+  const closeSettings = () => { if (wifiHost) void stopWifi(); setSettingsOpen(false); };
+  const connectWifi = async () => {
+    setWifiState('syncing'); setWifiMessage('');
+    try {
+      const result = await onConnectWifiSync(wifiAddress, wifiCode);
+      const changed = result.stats.received + result.stats.sent + result.stats.deleted;
+      setWifiMessage(changed ? `Готово: синхронизировано изменений — ${changed}.` : 'Готово: на устройствах уже одинаковые данные.'); setWifiState('done'); setWifiCode('');
+    } catch (reason) { setWifiMessage(wifiError(reason)); setWifiState('error'); }
+  };
+  useEffect(() => {
+    if (!wifiHost) return;
+    const remaining = Math.max(0, Date.parse(wifiHost.expiresAt) - Date.now());
+    const timer = window.setTimeout(() => { setWifiHost(null); setWifiState('error'); setWifiMessage('Время подключения истекло. Создайте новый код.'); }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [wifiHost]);
   return <main className="app-shell">
     <header className="mobile-header"><div className="mobile-header-actions"><button onClick={() => setMobileNav(true)} aria-label="Меню"><Menu /></button><button onClick={() => setSettingsOpen(true)} aria-label="Настройки"><Settings2 /></button></div><Brand /><SaveIndicator state={saveState} /></header>
     <AnimatePresence>{mobileNav && <motion.div className="mobile-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onClick={() => setMobileNav(false)} />}</AnimatePresence>
@@ -278,9 +342,9 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
       <MobileDayEntries entries={dayEntries} activeId={activeId} onPick={onActive} onCreate={create} />
       <AnimatePresence mode="wait">{active ? (typeof active.content === 'string' ? <Editor key={active.id} entry={active} onUpdate={update} onDelete={remove} /> : <EntryLoading key={`loading-${active.id}`} />) : <EmptyEditor date={selectedDate} onCreate={create} />}</AnimatePresence>
     </section>
-    <AnimatePresence>{settingsOpen && <motion.div className="settings-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onMouseDown={() => setSettingsOpen(false)}>
+    <AnimatePresence>{settingsOpen && <motion.div className="settings-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onMouseDown={closeSettings}>
       <motion.section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:10,scale:.985}} transition={{duration:.2}} onMouseDown={e => e.stopPropagation()}>
-        <div className="settings-heading"><div className="settings-symbol"><Settings2 size={19}/></div><div><span>Настройки защиты</span><h2 id="settings-title">Автоблокировка</h2></div><button onClick={() => setSettingsOpen(false)} aria-label="Закрыть настройки"><X size={18}/></button></div>
+        <div className="settings-heading"><div className="settings-symbol"><Settings2 size={19}/></div><div><span>Настройки защиты</span><h2 id="settings-title">Автоблокировка</h2></div><button onClick={closeSettings} aria-label="Закрыть настройки"><X size={18}/></button></div>
         <p>Сейф закроется, если в приложении не было клавиатуры, мыши или касаний.</p>
         <div className="lock-options" role="radiogroup" aria-label="Время автоблокировки">{AUTO_LOCK_OPTIONS.map(option => <button key={option.value} role="radio" aria-checked={autoLockMs === option.value} className={autoLockMs === option.value ? 'selected' : ''} onClick={() => updateAutoLock(option.value)}><span>{option.label}</span><i/></button>)}</div>
         <div className="settings-note"><ShieldCheck size={15}/><span>Настройка хранится внутри текущего зашифрованного сейфа.</span></div>
@@ -294,9 +358,24 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
         {backupState === 'fallback' && <div className="backup-message warning">Выбранная папка недоступна. Копия сохранена в папке EncryptMe — она уже открыта.</div>}
         {backupState === 'error' && <div className="backup-message error">Не удалось записать файл. Проверьте свободное место и попробуйте другую папку.</div>}
         <div className="settings-divider" />
+        <div className="settings-subheading"><span>Синхронизация по Wi‑Fi</span><p>Передаются только зашифрованные данные открытого сейфа. Оба устройства должны быть в одной сети.</p></div>
+        {window.encryptMe.platform === 'desktop' ? <div className="wifi-sync-panel">
+          {!wifiHost ? <button className="wifi-primary" onClick={startWifi} disabled={wifiState === 'starting'}><Wifi size={18}/><span><strong>{wifiState === 'starting' ? 'Запускаем…' : 'Разрешить подключение'}</strong><small>Открыть одноразовый сеанс на 5 минут</small></span></button> : <motion.div className="wifi-host" initial={{opacity:0,y:5}} animate={{opacity:1,y:0}}>
+            <div className="wifi-live"><i/><span>Ожидание iPhone</span><button onClick={stopWifi}>Остановить</button></div>
+            <label>Адрес компьютера<strong>{wifiHost.addresses[0] || 'Локальный адрес не найден'}</strong></label>
+            {wifiHost.addresses.length > 1 && <small className="wifi-alternate">Другие адреса: {wifiHost.addresses.slice(1).join(' · ')}</small>}
+            <label>Одноразовый код<strong className="wifi-code">{wifiHost.code}</strong></label>
+          </motion.div>}
+        </div> : <div className="wifi-client">
+          <label>Адрес с компьютера<input value={wifiAddress} onChange={event => setWifiAddress(event.target.value)} inputMode="url" autoCapitalize="none" placeholder="http://192.168.1.10:12345" /></label>
+          <label>Одноразовый код<input value={wifiCode} onChange={event => setWifiCode(event.target.value.toUpperCase().slice(0,14))} autoCapitalize="characters" placeholder="ABCD-EF12-3456" /></label>
+          <button className="wifi-primary" onClick={connectWifi} disabled={!wifiAddress.trim() || wifiCode.replace(/[^a-f0-9]/gi,'').length !== 12 || wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? 'Синхронизируем…' : 'Синхронизировать'}</strong><small>Подключиться к EncryptMe на Windows</small></span></button>
+        </div>}
+        {wifiMessage && <div className={`backup-message ${wifiState === 'done' ? 'success' : 'error'}`}>{wifiMessage}</div>}
+        <div className="settings-divider" />
         <div className="settings-subheading"><span>Аккаунт</span><p>Закрыть текущий сейф и вернуться к полному экрану входа или импорту другой копии.</p></div>
         <button className="account-switch" onClick={onSwitchAccount}><LogOut size={17}/><span><strong>Сменить аккаунт</strong><small>Выйти и выбрать способ входа</small></span><ChevronRight size={16}/></button>
-        <button className="primary settings-done" onClick={() => setSettingsOpen(false)}>Готово</button>
+        <button className="primary settings-done" onClick={closeSettings}>Готово</button>
       </motion.section>
     </motion.div>}</AnimatePresence>
   </main>;

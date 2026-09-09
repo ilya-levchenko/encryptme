@@ -80,6 +80,13 @@ function assertSession(sessionId: string) {
   return session;
 }
 
+function normalizeWifiAddress(value: string) {
+  const raw = value.trim().replace(/\/+$/, '');
+  const url = new URL(/^https?:\/\//i.test(raw) ? raw : `http://${raw}`);
+  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) throw new Error('INVALID_SYNC_ADDRESS');
+  return url.origin;
+}
+
 function validProfile(value: unknown): value is Profile {
   if (!value || typeof value !== 'object') return false;
   const profile = value as Partial<Profile>;
@@ -142,6 +149,7 @@ async function initializeLifecycle() {
 export function createMobileBridge(): Window['encryptMe'] {
   void initializeLifecycle();
   return {
+    platform: Capacitor.isNativePlatform() ? 'mobile' : 'web',
     async status() { return { initialized: await vaultStorage.exists(profilePath) }; },
 
     async initialize(input) {
@@ -282,6 +290,37 @@ export function createMobileBridge(): Window['encryptMe'] {
       await vaultStorage.write(profilePath, payload.profile);
       return { canceled: false, importedAt: new Date().toISOString(), recoveryCreated };
     },
+
+    async startWifiSync() { throw new Error('SYNC_HOST_UNAVAILABLE'); },
+    async stopWifiSync() { return { ok: true }; },
+    async connectWifiSync(input) {
+      const active = assertSession(input.sessionId);
+      await saveChain;
+      const address = normalizeWifiAddress(String(input.address || ''));
+      const code = String(input.code || '').replace(/[^a-f0-9]/gi, '').toUpperCase();
+      if (code.length !== 12) throw new Error('INVALID_SYNC_CODE');
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 20_000);
+      try {
+        const response = await fetch(`${address}/sync`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+          body: JSON.stringify({ code, container: active.container })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(String(result.error || 'SYNC_FAILED'));
+        if (!isSplitContainer(result.container)) throw new Error('INVALID_SYNC_RESPONSE');
+        if (result.container.kdf !== active.container.kdf || result.container.salt !== active.container.salt) throw new Error('SYNC_VAULT_MISMATCH');
+        const data = await openSplitVaultWithKey(result.container, active.key);
+        await vaultStorage.write(vaultPath(active.slot), result.container);
+        active.container = result.container;
+        active.data = data;
+        return { data, stats: result.stats || { received: 0, sent: 0, deleted: 0 } };
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw new Error('SYNC_TIMEOUT');
+        throw error;
+      } finally { window.clearTimeout(timeout); }
+    },
+    onWifiSyncUpdated() { return () => {}; },
 
     onWindowAction(callback) { windowActions.add(callback); return () => windowActions.delete(callback); },
     async completeWindowAction() { return { ok: true }; }

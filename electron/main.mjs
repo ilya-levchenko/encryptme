@@ -3,8 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, cp, mkdir, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
+import { networkInterfaces } from 'node:os';
 import { blankVault, createSplitVault, decryptVault, deriveVaultKey, FAST_KDF, isSplitVault, loadSplitEntry, openSplitVault, openSplitVaultWithKey, readJson, rekeySplitVault, safeCompareHex, SCRYPT_KDF, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
 import { createEncryptedBackup, openEncryptedBackup, writeEncryptedBackupFile } from './backup.mjs';
+import { mergeSplitVaults } from './wifi-sync.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devUrl = process.env.VITE_DEV_SERVER_URL || (app.isPackaged ? null : 'http://localhost:5173');
@@ -16,7 +19,9 @@ let isQuitting = false;
 let pendingWindowAction = null;
 let windowActionTimer = null;
 let trayHintShown = false;
+let wifiSync = null;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
+const WIFI_SYNC_TTL_MS = 5 * 60 * 1000;
 
 const storeDir = () => path.join(app.getPath('userData'), 'vault');
 const legacyStoreDirs = () => {
@@ -42,10 +47,94 @@ const readVault = async (slot) => {
 
 async function exists(file) { try { await access(file); return true; } catch { return false; } }
 function assertObject(value) { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_DATA'); }
+function stopWifiSync() {
+  if (!wifiSync) return;
+  clearTimeout(wifiSync.timer);
+  wifiSync.server.close();
+  wifiSync = null;
+}
 function clearSession() {
+  stopWifiSync();
   if (session) session.password = '\0'.repeat(session.password.length);
   if (session?.key) session.key.fill(0);
   session = null;
+}
+
+function localWifiAddresses(port) {
+  const addresses = new Set();
+  for (const interfaces of Object.values(networkInterfaces())) {
+    for (const info of interfaces || []) {
+      if (info.family === 'IPv4' && !info.internal) addresses.add(`http://${info.address}:${port}`);
+    }
+  }
+  const rank = address => address.includes('://192.168.') ? 0 : address.includes('://10.') ? 1 : /^http:\/\/172\.(1[6-9]|2\d|3[01])\./.test(address) ? 2 : 3;
+  return [...addresses].filter(address => !address.includes('://169.254.')).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+function readRequestJson(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = []; let size = 0;
+    request.on('data', chunk => {
+      size += chunk.length;
+      if (size > MAX_BACKUP_BYTES) { reject(new Error('SYNC_TOO_LARGE')); request.destroy(); return; }
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch { reject(new Error('INVALID_SYNC_REQUEST')); }
+    });
+    request.on('error', reject);
+  });
+}
+
+async function startWifiSyncHost(sessionId) {
+  if (!session || session.id !== sessionId) throw new Error('LOCKED');
+  await saveChain;
+  stopWifiSync();
+  const code = randomBytes(6).toString('hex').toUpperCase();
+  const hostSessionId = session.id;
+  let failures = 0;
+  const server = createServer(async (request, response) => {
+    response.setHeader('Access-Control-Allow-Origin', '*');
+    response.setHeader('Access-Control-Allow-Headers', 'content-type');
+    response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    response.setHeader('Access-Control-Allow-Private-Network', 'true');
+    response.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (request.method === 'OPTIONS') { response.statusCode = 204; response.end(); return; }
+    if (request.method !== 'POST' || request.url !== '/sync') { response.statusCode = 404; response.end(JSON.stringify({ error: 'NOT_FOUND' })); return; }
+    try {
+      if (!wifiSync || wifiSync.server !== server || !session || session.id !== hostSessionId) throw new Error('SYNC_EXPIRED');
+      const body = await readRequestJson(request);
+      const supplied = String(body?.code || '').replace(/[^A-F0-9]/gi, '').toUpperCase();
+      if (supplied !== code) {
+        failures += 1;
+        if (failures >= 8) setImmediate(stopWifiSync);
+        throw new Error('INVALID_SYNC_CODE');
+      }
+      if (!isSplitVault(body?.container)) throw new Error('INVALID_SYNC_VAULT');
+      await saveChain;
+      if (!session || session.id !== hostSessionId) throw new Error('SYNC_EXPIRED');
+      const merged = mergeSplitVaults(session.container, body.container, session.key);
+      await writeAtomic(vaultFile(session.slot, session.fileExt), merged.container);
+      session.container = merged.container;
+      session.data = merged.data;
+      mainWindow?.webContents.send('vault:wifi-sync-updated', { sessionId: session.id, data: merged.data, stats: merged.stats });
+      response.statusCode = 200;
+      response.end(JSON.stringify({ container: merged.container, data: merged.data, stats: merged.stats }));
+      setImmediate(stopWifiSync);
+    } catch (error) {
+      response.statusCode = error?.message === 'INVALID_SYNC_CODE' ? 401 : error?.message === 'SYNC_VAULT_MISMATCH' ? 409 : 400;
+      response.end(JSON.stringify({ error: error?.message || 'SYNC_FAILED' }));
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '0.0.0.0', () => { server.off('error', reject); resolve(); });
+  });
+  const port = server.address().port;
+  const expiresAt = new Date(Date.now() + WIFI_SYNC_TTL_MS).toISOString();
+  wifiSync = { server, code, sessionId: hostSessionId, timer: setTimeout(stopWifiSync, WIFI_SYNC_TTL_MS) };
+  return { addresses: localWifiAddresses(port), code: `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`, expiresAt };
 }
 
 function showWindow() {
@@ -236,6 +325,9 @@ ipcMain.handle('vault:lock', async () => {
   clearSession();
   return { ok: true };
 });
+
+ipcMain.handle('wifi-sync:start', async (_event, input) => startWifiSyncHost(String(input?.sessionId || '')));
+ipcMain.handle('wifi-sync:stop', async () => { stopWifiSync(); return { ok: true }; });
 
 ipcMain.handle('app:complete-window-action', async (_event, action) => {
   if (action !== 'hide' && action !== 'quit') throw new Error('INVALID_WINDOW_ACTION');
