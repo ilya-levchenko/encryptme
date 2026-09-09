@@ -117,6 +117,13 @@ export function App() {
     setKnownUsername(username.trim()); setLockReason(null); setSessionId(''); setData(emptyData()); setActiveId(null); setScreen('login'); setImportOpen(false);
   };
 
+  const switchAccount = useCallback(async () => {
+    await lock('manual');
+    setKnownUsername('');
+    setLockReason(null);
+    setImportOpen(false);
+  }, [lock]);
+
   useEffect(() => {
     if (screen !== 'diary') return;
     const autoLockMs = normalizeAutoLockMs(data.settings?.autoLockMs);
@@ -150,7 +157,7 @@ export function App() {
   return <><Diary data={data} selectedDate={selectedDate} activeId={activeId} saveState={saveState}
     onDate={date => { setSelectedDate(date); const entries = data.entries.filter(e => e.date === date).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)); setActiveId(entries[0]?.id || null); }}
     onActive={setActiveId} onChange={queueSave} onLock={() => void lock('manual')} onExport={exportBackup}
-    onImport={() => void lock('manual').then(() => setImportOpen(true))} />{importDialog}</>;
+    onImport={() => void lock('manual').then(() => setImportOpen(true))} onSwitchAccount={() => void switchAccount()} />{importDialog}</>;
 }
 
 function Brand() { return <div className="brand"><span className="brand-mark"><MoonStar size={17} /></span><span>EncryptMe</span></div>; }
@@ -196,31 +203,36 @@ function Setup({ onDone, onImport }: { onDone: () => void; onImport: () => void 
 function Login({ onUnlock, onImport, initialUsername = '', lockReason = null, idleTimeoutMs = IDLE_TIMEOUT_MS }: { onUnlock: (v: { sessionId: string; data: VaultData }, username: string) => void; onImport: () => void; initialUsername?: string; lockReason?: LockReason; idleTimeoutMs?: number }) {
   const [username, setUsername] = useState(initialUsername); const [password, setPassword] = useState('');
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const passwordOnly = Boolean(lockReason && initialUsername);
-  useEffect(() => { if (initialUsername) setUsername(initialUsername); }, [initialUsername]);
+  const [selectingAccount, setSelectingAccount] = useState(false);
+  const locked = Boolean(lockReason && !selectingAccount);
+  const passwordOnly = Boolean(locked && initialUsername);
+  useEffect(() => { if (initialUsername) setUsername(initialUsername); setSelectingAccount(false); }, [initialUsername, lockReason]);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); if (!username || !password) return; setBusy(true); setError('');
     try { onUnlock(await window.encryptMe.unlock({ username, password }), username); }
     catch { setError('Имя или пароль не подошли'); setBusy(false); }
   };
   return <main className="auth-shell"><div className="ambient" /><motion.form className="auth-panel login-panel" onSubmit={submit} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .5 }}>
-    <Brand /><div className="eyebrow">{lockReason === 'idle' ? `Автоблокировка · ${getAutoLockLabel(idleTimeoutMs)}` : lockReason ? 'Сейф защищён' : 'Личный зашифрованный дневник'}</div><h1>{lockReason ? 'Сейф закрыт.' : 'С возвращением.'}</h1><p className="lead">{lockReason === 'idle' ? `Не было активности ${getAutoLockLabel(idleTimeoutMs)}. Введите пароль, чтобы продолжить.` : lockReason ? 'Введите пароль, чтобы вернуться к своим записям.' : 'Откройте свой сейф и продолжайте с того места, где остановились.'}</p>
+    <Brand /><div className="eyebrow">{selectingAccount ? 'Смена аккаунта' : lockReason === 'idle' ? `Автоблокировка · ${getAutoLockLabel(idleTimeoutMs)}` : lockReason ? 'Сейф защищён' : 'Личный зашифрованный дневник'}</div><h1>{selectingAccount ? 'Войти заново.' : lockReason ? 'Сейф закрыт.' : 'С возвращением.'}</h1><p className="lead">{selectingAccount ? 'Введите имя и пароль или импортируйте зашифрованную копию другого профиля.' : lockReason === 'idle' ? `Не было активности ${getAutoLockLabel(idleTimeoutMs)}. Введите пароль, чтобы продолжить.` : lockReason ? 'Введите пароль, чтобы вернуться к своим записям.' : 'Откройте свой сейф и продолжайте с того места, где остановились.'}</p>
     {passwordOnly ? <div className="locked-profile"><LockKeyhole size={19}/><div><span>Профиль</span><strong>{username}</strong></div></div> : <label>Имя профиля<input autoFocus value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder="Ваше имя" /></label>}
     <label>Пароль<input autoFocus={passwordOnly} type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" placeholder="••••••••••••" /></label>
     <AnimatePresence>{error && <motion.div className="form-error" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0 }}>{error}</motion.div>}</AnimatePresence>
-    <button className="primary wide" disabled={!username || !password || busy}>{busy ? 'Открываем…' : lockReason ? 'Разблокировать' : 'Открыть дневник'} <LockKeyhole size={17} /></button>
-    <button className="restore-link" type="button" onClick={onImport}><Upload size={15}/> Импортировать зашифрованную копию</button>
-    <div className="privacy"><ShieldCheck size={15} /> {lockReason ? 'Тип сейфа определяется только паролем' : 'Локально и зашифровано'}</div>
+    <button className="primary wide" disabled={!username || !password || busy}>{busy ? 'Открываем…' : selectingAccount ? 'Войти' : lockReason ? 'Разблокировать' : 'Открыть дневник'} <LockKeyhole size={17} /></button>
+    <div className="login-secondary-actions">
+      {passwordOnly && <button className="restore-link" type="button" onClick={() => { setSelectingAccount(true); setUsername(''); setPassword(''); setError(''); }}><LogOut size={15}/> Сменить аккаунт</button>}
+      <button className="restore-link" type="button" onClick={onImport}><Upload size={15}/> Импортировать зашифрованную копию</button>
+    </div>
+    <div className="privacy"><ShieldCheck size={15} /> {locked ? 'Тип сейфа определяется только паролем' : 'Локально и зашифровано'}</div>
   </motion.form><aside className="auth-quote"><span>«</span><p>Тишина тоже<br />становится яснее,<br />когда её записать.</p></aside></main>;
 }
 
 type DiaryProps = {
   data: VaultData; selectedDate: string; activeId: string | null; saveState: SaveState;
   onDate(date: string): void; onActive(id: string): void; onChange(data: VaultData): void; onLock(): void;
-  onExport(): Promise<{ canceled: boolean; fileName?: string; fallback?: boolean }>; onImport(): void;
+  onExport(): Promise<{ canceled: boolean; fileName?: string; fallback?: boolean }>; onImport(): void; onSwitchAccount(): void;
 };
 
-function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport }: DiaryProps) {
+function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount }: DiaryProps) {
   const [month, setMonth] = useState(parseISO(selectedDate)); const [search, setSearch] = useState(''); const [mobileNav, setMobileNav] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupState, setBackupState] = useState<'idle' | 'exporting' | 'done' | 'fallback' | 'error'>('idle');
   const autoLockMs = normalizeAutoLockMs(data.settings?.autoLockMs);
@@ -281,6 +293,9 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
         {backupState === 'done' && <div className="backup-message success">Зашифрованная копия сохранена.</div>}
         {backupState === 'fallback' && <div className="backup-message warning">Выбранная папка недоступна. Копия сохранена в папке EncryptMe — она уже открыта.</div>}
         {backupState === 'error' && <div className="backup-message error">Не удалось записать файл. Проверьте свободное место и попробуйте другую папку.</div>}
+        <div className="settings-divider" />
+        <div className="settings-subheading"><span>Аккаунт</span><p>Закрыть текущий сейф и вернуться к полному экрану входа или импорту другой копии.</p></div>
+        <button className="account-switch" onClick={onSwitchAccount}><LogOut size={17}/><span><strong>Сменить аккаунт</strong><small>Выйти и выбрать способ входа</small></span><ChevronRight size={16}/></button>
         <button className="primary settings-done" onClick={() => setSettingsOpen(false)}>Готово</button>
       </motion.section>
     </motion.div>}</AnimatePresence>
@@ -382,12 +397,36 @@ function EntryLoading() {
 function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: Partial<DiaryEntry>): void; onDelete(): void }) {
   const initialContent = entry.content || '<p><br></p>';
   const editorRef = useRef<HTMLDivElement>(null); const [moodOpen, setMoodOpen] = useState(false); const contentRef = useRef(initialContent);
+  const [formats, setFormats] = useState({ bold: false, italic: false, underline: false, strike: false, unordered: false, ordered: false, quote: false, spoiler: false });
   const historyRef = useRef<string[]>([initialContent]); const historyIndex = useRef(0);
   useEffect(() => {
     const html = entry.content || '<p><br></p>';
     if (editorRef.current && editorRef.current.innerHTML !== html) editorRef.current.innerHTML = html;
     contentRef.current = html; historyRef.current = [html]; historyIndex.current = 0;
   }, [entry.id]);
+  const selectedElements = useCallback((selector: string) => {
+    const editor = editorRef.current; const selection = window.getSelection();
+    if (!editor || !selection?.rangeCount) return [] as HTMLElement[];
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return [] as HTMLElement[];
+    return [...editor.querySelectorAll<HTMLElement>(selector)].filter(element => {
+      try { return range.intersectsNode(element); } catch { return false; }
+    });
+  }, []);
+  const refreshFormats = useCallback(() => {
+    const editor = editorRef.current; const selection = window.getSelection();
+    if (!editor || !selection?.rangeCount || !editor.contains(selection.getRangeAt(0).commonAncestorContainer)) return;
+    setFormats({
+      bold: selectedElements('b,strong').length > 0, italic: selectedElements('i,em').length > 0,
+      underline: selectedElements('u').length > 0, strike: selectedElements('s,strike').length > 0,
+      unordered: selectedElements('ul').length > 0, ordered: selectedElements('ol').length > 0,
+      quote: selectedElements('blockquote').length > 0, spoiler: selectedElements('[data-spoiler="true"]').length > 0
+    });
+  }, [selectedElements]);
+  useEffect(() => {
+    document.addEventListener('selectionchange', refreshFormats);
+    return () => document.removeEventListener('selectionchange', refreshFormats);
+  }, [refreshFormats]);
   const commit = () => {
     if (!editorRef.current) return;
     const html = sanitize(editorRef.current.innerHTML);
@@ -403,16 +442,23 @@ function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: 
     if (index < 0 || index >= historyRef.current.length || !editorRef.current) return;
     const html = historyRef.current[index]; historyIndex.current = index; contentRef.current = html; editorRef.current.innerHTML = html; editorRef.current.focus(); onUpdate({ content: html });
   };
-  const command = (cmd: string, value?: string) => { editorRef.current?.focus(); document.execCommand(cmd, false, value); commit(); };
+  const command = (cmd: string, value?: string) => { editorRef.current?.focus(); document.execCommand(cmd, false, value); commit(); refreshFormats(); };
+  const toggleQuote = () => {
+    const editor = editorRef.current; if (!editor) return;
+    editor.focus();
+    const quotes = selectedElements('blockquote');
+    if (quotes.length) quotes.reverse().forEach(quote => quote.replaceWith(...Array.from(quote.childNodes)));
+    else document.execCommand('formatBlock', false, 'blockquote');
+    commit(); refreshFormats();
+  };
   const toggleSpoiler = () => {
     const editor = editorRef.current; const selection = window.getSelection();
     if (!editor || !selection?.rangeCount || selection.isCollapsed) return;
     const range = selection.getRangeAt(0);
     if (!editor.contains(range.commonAncestorContainer)) return;
-    const origin = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer as Element : range.commonAncestorContainer.parentElement;
-    const existing = origin?.closest<HTMLElement>('[data-spoiler="true"]');
-    if (existing && editor.contains(existing)) {
-      existing.replaceWith(...Array.from(existing.childNodes));
+    const existing = selectedElements('[data-spoiler="true"]');
+    if (existing.length) {
+      existing.reverse().forEach(spoiler => spoiler.replaceWith(...Array.from(spoiler.childNodes)));
     } else {
       const fragment = range.extractContents();
       fragment.querySelectorAll?.('[data-spoiler="true"]').forEach(spoiler => spoiler.replaceWith(...Array.from(spoiler.childNodes)));
@@ -420,7 +466,7 @@ function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: 
       spoiler.setAttribute('data-spoiler', 'true'); spoiler.append(fragment); range.insertNode(spoiler);
       range.setStartAfter(spoiler); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
     }
-    commit();
+    commit(); refreshFormats();
   };
   const wordCount = countWords(entry.content);
   return <motion.article className="editor" initial={{opacity:0, y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.22}}>
@@ -430,13 +476,13 @@ function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: 
     <input className="title-input" value={entry.title} onChange={e => onUpdate({title:e.target.value.slice(0,140)})} placeholder="Название записи" />
     <div className="toolbar" role="toolbar" aria-label="Форматирование">
       <Tool icon={<Undo2/>} label="Отменить" onClick={() => travelHistory(-1)}/><Tool icon={<Redo2/>} label="Повторить" onClick={() => travelHistory(1)}/><span className="tool-sep"/>
-      <Tool icon={<Bold/>} label="Жирный" onClick={() => command('bold')}/><Tool icon={<Italic/>} label="Курсив" onClick={() => command('italic')}/><Tool icon={<Underline/>} label="Подчёркнутый" onClick={() => command('underline')}/><Tool icon={<Strikethrough/>} label="Зачёркнутый" onClick={() => command('strikeThrough')}/><span className="tool-sep"/>
-      <Tool icon={<List/>} label="Список" onClick={() => command('insertUnorderedList')}/><Tool icon={<ListOrdered/>} label="Нумерованный список" onClick={() => command('insertOrderedList')}/><Tool icon={<Quote/>} label="Цитата" onClick={() => command('formatBlock','blockquote')}/><span className="tool-sep"/>
-      <Tool icon={<EyeOff/>} label="Скрыть выделенное" onClick={toggleSpoiler}/>
+      <Tool icon={<Bold/>} label="Жирный" pressed={formats.bold} onClick={() => command('bold')}/><Tool icon={<Italic/>} label="Курсив" pressed={formats.italic} onClick={() => command('italic')}/><Tool icon={<Underline/>} label="Подчёркнутый" pressed={formats.underline} onClick={() => command('underline')}/><Tool icon={<Strikethrough/>} label="Зачёркнутый" pressed={formats.strike} onClick={() => command('strikeThrough')}/><span className="tool-sep"/>
+      <Tool icon={<List/>} label="Список" pressed={formats.unordered} onClick={() => command('insertUnorderedList')}/><Tool icon={<ListOrdered/>} label="Нумерованный список" pressed={formats.ordered} onClick={() => command('insertOrderedList')}/><Tool icon={<Quote/>} label="Цитата" pressed={formats.quote} onClick={toggleQuote}/><span className="tool-sep"/>
+      <Tool icon={<EyeOff/>} label="Скрыть выделенное" pressed={formats.spoiler} onClick={toggleSpoiler}/>
     </div>
-    <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder="Что хочется сохранить об этом дне?" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 1 : -1); } }} onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={commit} />
+    <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder="Что хочется сохранить об этом дне?" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 1 : -1); } }} onKeyUp={refreshFormats} onMouseUp={refreshFormats} onFocus={refreshFormats} onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={commit} />
     <footer className="editor-footer"><span>{wordCount} {wordCount === 1 ? 'слово' : wordCount > 1 && wordCount < 5 ? 'слова' : 'слов'}</span><span>{plainText(entry.content).length} знаков</span><button data-haptic="warning" className="delete-entry" onClick={onDelete} title="Удалить запись" aria-label="Удалить запись"><Trash2 size={18}/><span>Удалить запись</span></button></footer>
   </motion.article>;
 }
 
-function Tool({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick(): void }) { return <button className="tool" title={label} aria-label={label} onMouseDown={e=>e.preventDefault()} onClick={onClick}>{icon}</button>; }
+function Tool({ icon, label, pressed, onClick }: { icon: React.ReactNode; label: string; pressed?: boolean; onClick(): void }) { return <button className={`tool${pressed ? ' active' : ''}`} title={label} aria-label={label} aria-pressed={pressed} onMouseDown={e=>e.preventDefault()} onClick={onClick}>{icon}</button>; }
