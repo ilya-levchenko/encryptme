@@ -297,7 +297,7 @@ export function createMobileBridge(): Window['encryptMe'] {
       const active = assertSession(input.sessionId);
       await saveChain;
       const address = normalizeWifiAddress(String(input.address || ''));
-      const code = String(input.code || '').replace(/[^a-f0-9]/gi, '').toUpperCase();
+      const code = String(input.code || '').replace(/\D/g, '');
       if (code.length !== 12) throw new Error('INVALID_SYNC_CODE');
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 20_000);

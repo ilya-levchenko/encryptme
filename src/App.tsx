@@ -11,6 +11,7 @@ import {
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { AUTO_LOCK_OPTIONS, getAutoLockLabel, hasBeenIdle, IDLE_TIMEOUT_MS, normalizeAutoLockMs } from './idle';
+import { formatWifiSyncCode, isCompleteWifiSyncCode, wifiSyncCodeDigits } from './wifi-sync-code';
 
 type Screen = 'loading' | 'setup' | 'login' | 'diary';
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -307,6 +308,8 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
   const stopWifi = async () => { await onStopWifiSync(); setWifiHost(null); setWifiState('idle'); setWifiMessage(''); };
   const closeSettings = () => { if (wifiHost) void stopWifi(); setSettingsOpen(false); };
   const connectWifi = async () => {
+    if (!wifiAddress.trim()) { setWifiState('error'); setWifiMessage('Введите адрес, показанный на компьютере.'); return; }
+    if (!isCompleteWifiSyncCode(wifiCode)) { setWifiState('error'); setWifiMessage('Введите все 12 цифр одноразового кода.'); return; }
     setWifiState('syncing'); setWifiMessage('');
     try {
       const result = await onConnectWifiSync(wifiAddress, wifiCode);
@@ -368,8 +371,8 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
           </motion.div>}
         </div> : <div className="wifi-client">
           <label>Адрес с компьютера<input value={wifiAddress} onChange={event => setWifiAddress(event.target.value)} inputMode="url" autoCapitalize="none" placeholder="http://192.168.1.10:12345" /></label>
-          <label>Одноразовый код<input value={wifiCode} onChange={event => setWifiCode(event.target.value.toUpperCase().slice(0,14))} autoCapitalize="characters" placeholder="ABCD-EF12-3456" /></label>
-          <button className="wifi-primary" onClick={connectWifi} disabled={!wifiAddress.trim() || wifiCode.replace(/[^a-f0-9]/gi,'').length !== 12 || wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? 'Синхронизируем…' : 'Синхронизировать'}</strong><small>Подключиться к EncryptMe на Windows</small></span></button>
+          <label>Одноразовый код<input value={wifiCode} onChange={event => { setWifiCode(formatWifiSyncCode(event.target.value)); if (wifiState === 'error') setWifiMessage(''); }} inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" enterKeyHint="done" maxLength={14} placeholder="1234-5678-9012" /><small>{wifiSyncCodeDigits(wifiCode).length} из 12 цифр</small></label>
+          <button className="wifi-primary" onClick={connectWifi} disabled={wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? 'Синхронизируем…' : 'Синхронизировать'}</strong><small>Подключиться к EncryptMe на Windows</small></span></button>
         </div>}
         {wifiMessage && <div className={`backup-message ${wifiState === 'done' ? 'success' : 'error'}`}>{wifiMessage}</div>}
         <div className="settings-divider" />

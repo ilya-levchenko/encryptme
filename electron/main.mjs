@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } f
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, cp, mkdir, stat } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { blankVault, createSplitVault, decryptVault, deriveVaultKey, FAST_KDF, isSplitVault, loadSplitEntry, openSplitVault, openSplitVaultWithKey, readJson, rekeySplitVault, safeCompareHex, SCRYPT_KDF, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
@@ -91,7 +91,7 @@ async function startWifiSyncHost(sessionId) {
   if (!session || session.id !== sessionId) throw new Error('LOCKED');
   await saveChain;
   stopWifiSync();
-  const code = randomBytes(6).toString('hex').toUpperCase();
+  const code = Array.from({ length: 12 }, () => randomInt(10)).join('');
   const hostSessionId = session.id;
   let failures = 0;
   const server = createServer(async (request, response) => {
@@ -105,7 +105,7 @@ async function startWifiSyncHost(sessionId) {
     try {
       if (!wifiSync || wifiSync.server !== server || !session || session.id !== hostSessionId) throw new Error('SYNC_EXPIRED');
       const body = await readRequestJson(request);
-      const supplied = String(body?.code || '').replace(/[^A-F0-9]/gi, '').toUpperCase();
+      const supplied = String(body?.code || '').replace(/\D/g, '');
       if (supplied !== code) {
         failures += 1;
         if (failures >= 8) setImmediate(stopWifiSync);
