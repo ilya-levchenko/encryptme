@@ -98,12 +98,17 @@ async function chooseBackupFile() {
   return new Promise<File | null>(resolve => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.encryptme-backup,application/json';
+    const native = Capacitor.isNativePlatform();
+    // iOS Files greys out custom extensions when WKWebView cannot map the HTML
+    // accept filter to a registered system content type. Native builds validate
+    // the selected document below instead of filtering it in the picker.
+    if (!native) input.accept = '.encryptme-backup,application/json';
     input.style.display = 'none';
     let settled = false;
     const finish = (file: File | null) => { if (settled) return; settled = true; input.remove(); resolve(file); };
     input.addEventListener('change', () => finish(input.files?.[0] || null), { once: true });
-    window.addEventListener('focus', () => window.setTimeout(() => finish(input.files?.[0] || null), 400), { once: true });
+    input.addEventListener('cancel', () => finish(null), { once: true });
+    if (!native) window.addEventListener('focus', () => window.setTimeout(() => finish(input.files?.[0] || null), 400), { once: true });
     document.body.append(input);
     input.click();
   });
