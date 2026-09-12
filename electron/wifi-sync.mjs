@@ -4,6 +4,10 @@ const iso = value => typeof value === 'string' && !Number.isNaN(Date.parse(value
 const tombstonesOf = data => data?.sync?.tombstones && typeof data.sync.tombstones === 'object' ? data.sync.tombstones : {};
 const comparable = value => JSON.stringify(value || {});
 
+export function createWifiSyncResponse(merged) {
+  return { container: merged.container, stats: merged.stats };
+}
+
 export function mergeSplitVaults(localContainer, remoteContainer, key) {
   if (!isSplitVault(localContainer) || !isSplitVault(remoteContainer)) throw new Error('INVALID_SYNC_VAULT');
   if (localContainer.kdf !== remoteContainer.kdf || localContainer.salt !== remoteContainer.salt) throw new Error('SYNC_VAULT_MISMATCH');

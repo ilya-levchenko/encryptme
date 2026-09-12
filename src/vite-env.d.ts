@@ -27,6 +27,7 @@ interface Window {
     importBackup(input: { username: string; password: string }): Promise<{ canceled: boolean; importedAt?: string; recoveryCreated?: boolean }>;
     startWifiSync(input: { sessionId: string }): Promise<{ addresses: string[]; code: string; expiresAt: string }>;
     stopWifiSync(): Promise<{ ok: boolean }>;
+    scanWifiSyncQr(): Promise<{ address: string; code: string }>;
     connectWifiSync(input: { sessionId: string; address: string; code: string }): Promise<{ data: VaultData; stats: WifiSyncStats }>;
     onWifiSyncUpdated(callback: (update: { sessionId: string; data: VaultData; stats: WifiSyncStats }) => void): () => void;
     onWindowAction(callback: (action: 'hide' | 'quit') => void): () => void;

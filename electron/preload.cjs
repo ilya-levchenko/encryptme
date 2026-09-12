@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('encryptMe', {
   importBackup: (input) => ipcRenderer.invoke('vault:import', input),
   startWifiSync: (input) => ipcRenderer.invoke('wifi-sync:start', input),
   stopWifiSync: () => ipcRenderer.invoke('wifi-sync:stop'),
+  scanWifiSyncQr: () => Promise.reject(new Error('QR_SCANNER_UNAVAILABLE')),
   connectWifiSync: () => Promise.reject(new Error('SYNC_CLIENT_UNAVAILABLE')),
   onWifiSyncUpdated: (callback) => {
     const listener = (_event, update) => callback(update);

@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Italic,
   Download, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
-  Redo2, RefreshCw, Save, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, Wifi, X, EyeOff
+  Redo2, RefreshCw, Save, ScanQrCode, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, Wifi, X, EyeOff
 } from 'lucide-react';
 import {
   addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay,
@@ -12,6 +12,8 @@ import {
 import { ru } from 'date-fns/locale';
 import { AUTO_LOCK_OPTIONS, getAutoLockLabel, hasBeenIdle, IDLE_TIMEOUT_MS, normalizeAutoLockMs } from './idle';
 import { formatWifiSyncCode, isCompleteWifiSyncCode, wifiSyncCodeDigits } from './wifi-sync-code';
+import { createWifiSyncQrPayload } from './wifi-sync-qr';
+import { createWifiSyncQrDataUrl } from './wifi-sync-qr-image';
 
 type Screen = 'loading' | 'setup' | 'login' | 'diary';
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -180,6 +182,7 @@ export function App() {
     onImport={() => void lock('manual').then(() => setImportOpen(true))} onSwitchAccount={() => void switchAccount()}
     onStartWifiSync={async () => { await flushForSync(); return window.encryptMe.startWifiSync({ sessionId }); }}
     onStopWifiSync={() => window.encryptMe.stopWifiSync()}
+    onScanWifiSyncQr={() => window.encryptMe.scanWifiSyncQr()}
     onConnectWifiSync={async (address, code) => { await flushForSync(); const result = await window.encryptMe.connectWifiSync({ sessionId, address, code }); applySyncedData(result.data); return result; }} />{importDialog}</>;
 }
 
@@ -254,15 +257,16 @@ type DiaryProps = {
   onDate(date: string): void; onActive(id: string): void; onChange(data: VaultData): void; onLock(): void;
   onExport(): Promise<{ canceled: boolean; fileName?: string; fallback?: boolean }>; onImport(): void; onSwitchAccount(): void;
   onStartWifiSync(): Promise<{ addresses: string[]; code: string; expiresAt: string }>; onStopWifiSync(): Promise<{ ok: boolean }>;
+  onScanWifiSyncQr(): Promise<{ address: string; code: string }>;
   onConnectWifiSync(address: string, code: string): Promise<{ data: VaultData; stats: WifiSyncStats }>;
 };
 
-function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onConnectWifiSync }: DiaryProps) {
+function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onScanWifiSyncQr, onConnectWifiSync }: DiaryProps) {
   const [month, setMonth] = useState(parseISO(selectedDate)); const [search, setSearch] = useState(''); const [mobileNav, setMobileNav] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupState, setBackupState] = useState<'idle' | 'exporting' | 'done' | 'fallback' | 'error'>('idle');
-  const [wifiState, setWifiState] = useState<'idle' | 'starting' | 'waiting' | 'syncing' | 'done' | 'error'>('idle');
+  const [wifiState, setWifiState] = useState<'idle' | 'starting' | 'waiting' | 'scanning' | 'syncing' | 'done' | 'error'>('idle');
   const [wifiHost, setWifiHost] = useState<{ addresses: string[]; code: string; expiresAt: string } | null>(null);
-  const [wifiAddress, setWifiAddress] = useState(''); const [wifiCode, setWifiCode] = useState(''); const [wifiMessage, setWifiMessage] = useState('');
+  const [wifiAddress, setWifiAddress] = useState(''); const [wifiCode, setWifiCode] = useState(''); const [wifiMessage, setWifiMessage] = useState(''); const [wifiQrImage, setWifiQrImage] = useState('');
   useEffect(() => window.encryptMe.onWifiSyncUpdated(update => {
     const changed = update.stats.received + update.stats.sent + update.stats.deleted;
     setWifiHost(null); setWifiState('done');
@@ -298,6 +302,8 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     if (message.includes('SYNC_VAULT_MISMATCH')) return 'На устройствах открыты разные сейфы. Сначала импортируйте одну резервную копию.';
     if (message.includes('SYNC_TIMEOUT') || message.includes('Failed to fetch')) return 'Компьютер не отвечает. Проверьте Wi‑Fi, адрес и разрешение брандмауэра.';
     if (message.includes('INVALID_SYNC_ADDRESS')) return 'Введите адрес, показанный на компьютере.';
+    if (message.includes('INVALID_SYNC_QR')) return 'Это не QR-код подключения EncryptMe.';
+    if (/permission|denied|camera/i.test(message)) return 'Разрешите EncryptMe доступ к камере в настройках iPhone.';
     return 'Не удалось выполнить синхронизацию.';
   };
   const startWifi = async () => {
@@ -307,16 +313,37 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
   };
   const stopWifi = async () => { await onStopWifiSync(); setWifiHost(null); setWifiState('idle'); setWifiMessage(''); };
   const closeSettings = () => { if (wifiHost) void stopWifi(); setSettingsOpen(false); };
-  const connectWifi = async () => {
-    if (!wifiAddress.trim()) { setWifiState('error'); setWifiMessage('Введите адрес, показанный на компьютере.'); return; }
-    if (!isCompleteWifiSyncCode(wifiCode)) { setWifiState('error'); setWifiMessage('Введите все 12 цифр одноразового кода.'); return; }
+  const connectWifi = async (address = wifiAddress, code = wifiCode) => {
+    if (!address.trim()) { setWifiState('error'); setWifiMessage('Введите адрес, показанный на компьютере.'); return; }
+    if (!isCompleteWifiSyncCode(code)) { setWifiState('error'); setWifiMessage('Введите все 12 цифр одноразового кода.'); return; }
     setWifiState('syncing'); setWifiMessage('');
     try {
-      const result = await onConnectWifiSync(wifiAddress, wifiCode);
+      const result = await onConnectWifiSync(address, code);
       const changed = result.stats.received + result.stats.sent + result.stats.deleted;
       setWifiMessage(changed ? `Готово: синхронизировано изменений — ${changed}.` : 'Готово: на устройствах уже одинаковые данные.'); setWifiState('done'); setWifiCode('');
     } catch (reason) { setWifiMessage(wifiError(reason)); setWifiState('error'); }
   };
+  const scanWifi = async () => {
+    setWifiState('scanning'); setWifiMessage('');
+    try {
+      const connection = await onScanWifiSyncQr();
+      setWifiAddress(connection.address); setWifiCode(connection.code);
+      await connectWifi(connection.address, connection.code);
+    } catch (reason) {
+      if (String(reason).includes('QR_SCAN_CANCELLED')) { setWifiState('idle'); return; }
+      setWifiMessage(wifiError(reason)); setWifiState('error');
+    }
+  };
+  useEffect(() => {
+    if (!wifiHost?.addresses[0]) { setWifiQrImage(''); return; }
+    setWifiQrImage('');
+    let cancelled = false;
+    try {
+      const payload = createWifiSyncQrPayload(wifiHost.addresses[0], wifiHost.code);
+      void createWifiSyncQrDataUrl(payload).then(image => { if (!cancelled) setWifiQrImage(image); }).catch(() => { if (!cancelled) setWifiQrImage(''); });
+    } catch { setWifiQrImage(''); }
+    return () => { cancelled = true; };
+  }, [wifiHost]);
   useEffect(() => {
     if (!wifiHost) return;
     const remaining = Math.max(0, Date.parse(wifiHost.expiresAt) - Date.now());
@@ -365,14 +392,17 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
         {window.encryptMe.platform === 'desktop' ? <div className="wifi-sync-panel">
           {!wifiHost ? <button className="wifi-primary" onClick={startWifi} disabled={wifiState === 'starting'}><Wifi size={18}/><span><strong>{wifiState === 'starting' ? 'Запускаем…' : 'Разрешить подключение'}</strong><small>Открыть одноразовый сеанс на 5 минут</small></span></button> : <motion.div className="wifi-host" initial={{opacity:0,y:5}} animate={{opacity:1,y:0}}>
             <div className="wifi-live"><i/><span>Ожидание iPhone</span><button onClick={stopWifi}>Остановить</button></div>
+            {wifiQrImage && <motion.div className="wifi-qr" initial={{opacity:0,scale:.96}} animate={{opacity:1,scale:1}}><img src={wifiQrImage} alt="QR-код подключения EncryptMe"/><span>Сканируйте в EncryptMe на iPhone</span></motion.div>}
             <label>Адрес компьютера<strong>{wifiHost.addresses[0] || 'Локальный адрес не найден'}</strong></label>
             {wifiHost.addresses.length > 1 && <small className="wifi-alternate">Другие адреса: {wifiHost.addresses.slice(1).join(' · ')}</small>}
             <label>Одноразовый код<strong className="wifi-code">{wifiHost.code}</strong></label>
           </motion.div>}
         </div> : <div className="wifi-client">
+          <button className="wifi-primary wifi-scan" onClick={scanWifi} disabled={wifiState === 'scanning' || wifiState === 'syncing'}><ScanQrCode size={20}/><span><strong>{wifiState === 'scanning' ? 'Открываем камеру…' : 'Сканировать QR-код'}</strong><small>Синхронизация начнётся автоматически</small></span></button>
+          <div className="wifi-manual-divider"><span>или вручную</span></div>
           <label>Адрес с компьютера<input value={wifiAddress} onChange={event => setWifiAddress(event.target.value)} inputMode="url" autoCapitalize="none" placeholder="http://192.168.1.10:12345" /></label>
           <label>Одноразовый код<input value={wifiCode} onChange={event => { setWifiCode(formatWifiSyncCode(event.target.value)); if (wifiState === 'error') setWifiMessage(''); }} inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" enterKeyHint="done" maxLength={14} placeholder="1234-5678-9012" /><small>{wifiSyncCodeDigits(wifiCode).length} из 12 цифр</small></label>
-          <button className="wifi-primary" onClick={connectWifi} disabled={wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? 'Синхронизируем…' : 'Синхронизировать'}</strong><small>Подключиться к EncryptMe на Windows</small></span></button>
+          <button className="wifi-primary" onClick={() => void connectWifi()} disabled={wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? 'Синхронизируем…' : 'Синхронизировать'}</strong><small>Подключиться к EncryptMe на Windows</small></span></button>
         </div>}
         {wifiMessage && <div className={`backup-message ${wifiState === 'done' ? 'success' : 'error'}`}>{wifiMessage}</div>}
         <div className="settings-divider" />

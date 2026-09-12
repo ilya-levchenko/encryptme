@@ -4,6 +4,7 @@ import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { decryptBlob, decryptContainer, deriveKey, encryptBlob, encryptContainer, FAST_KDF, fromBase64, isEncryptedContainer, isSplitContainer, isVaultContainer, SCRYPT_KDF, secureEqual, type EncryptedContainer, type SplitContainer, toBase64, type VaultKdf, usernameDigest } from './crypto';
 import { vaultStorage } from './storage';
+import { scanWifiSyncQr as scanNativeWifiSyncQr } from './qr-scanner';
 
 type Profile = { version: 1; usernameHash: string; slots: ['a', 'b']; kdfSalt?: string; kdf?: VaultKdf };
 type Session = { id: string; slot: 'a' | 'b'; password: string; key: CryptoKey; container: SplitContainer; data: VaultData };
@@ -293,6 +294,7 @@ export function createMobileBridge(): Window['encryptMe'] {
 
     async startWifiSync() { throw new Error('SYNC_HOST_UNAVAILABLE'); },
     async stopWifiSync() { return { ok: true }; },
+    async scanWifiSyncQr() { return scanNativeWifiSyncQr(); },
     async connectWifiSync(input) {
       const active = assertSession(input.sessionId);
       await saveChain;

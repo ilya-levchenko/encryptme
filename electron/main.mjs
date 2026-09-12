@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { blankVault, createSplitVault, decryptVault, deriveVaultKey, FAST_KDF, isSplitVault, loadSplitEntry, openSplitVault, openSplitVaultWithKey, readJson, rekeySplitVault, safeCompareHex, SCRYPT_KDF, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
 import { createEncryptedBackup, openEncryptedBackup, writeEncryptedBackupFile } from './backup.mjs';
-import { mergeSplitVaults } from './wifi-sync.mjs';
+import { createWifiSyncResponse, mergeSplitVaults } from './wifi-sync.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devUrl = process.env.VITE_DEV_SERVER_URL || (app.isPackaged ? null : 'http://localhost:5173');
@@ -120,7 +120,7 @@ async function startWifiSyncHost(sessionId) {
       session.data = merged.data;
       mainWindow?.webContents.send('vault:wifi-sync-updated', { sessionId: session.id, data: merged.data, stats: merged.stats });
       response.statusCode = 200;
-      response.end(JSON.stringify({ container: merged.container, data: merged.data, stats: merged.stats }));
+      response.end(JSON.stringify(createWifiSyncResponse(merged)));
       setImmediate(stopWifiSync);
     } catch (error) {
       response.statusCode = error?.message === 'INVALID_SYNC_CODE' ? 401 : error?.message === 'SYNC_VAULT_MISMATCH' ? 409 : 400;

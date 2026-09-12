@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { blankVault, createSplitVault, loadSplitEntry, updateSplitVault } from './vault.mjs';
-import { mergeSplitVaults } from './wifi-sync.mjs';
+import { createWifiSyncResponse, mergeSplitVaults } from './wifi-sync.mjs';
 
 const entry = (id, title, updatedAt, content = title) => ({ id, date: '2026-09-09', title, content, mood: 'none', createdAt: updatedAt, updatedAt });
 
@@ -34,5 +34,19 @@ describe('Wi-Fi vault merge', () => {
     const remote = await createSplitVault(blankVault('real'), 'correct horse battery staple');
     expect(() => mergeSplitVaults(local.container, remote.container, local.key)).toThrow('SYNC_VAULT_MISMATCH');
     local.key.fill(0); remote.key.fill(0);
+  });
+
+  it('never includes decrypted diary data in the network response', () => {
+    const response = createWifiSyncResponse({
+      container: { format: 'encryptme-vault-split' },
+      data: { entries: [{ title: 'Секретный текст' }] },
+      stats: { received: 1, sent: 0, deleted: 0 }
+    });
+
+    expect(response).toEqual({
+      container: { format: 'encryptme-vault-split' },
+      stats: { received: 1, sent: 0, deleted: 0 }
+    });
+    expect(JSON.stringify(response)).not.toContain('Секретный текст');
   });
 });
