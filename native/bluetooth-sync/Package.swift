@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "EncryptMeBluetoothSync",
     platforms: [.iOS(.v15)],
-    products: [.library(name: "EncryptMeBluetoothSync", targets: ["BluetoothSyncPlugin"])],
+    products: [.library(name: "EncryptmeBluetoothSync", targets: ["BluetoothSyncPlugin"])],
     dependencies: [.package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.0.0")],
     targets: [.target(name: "BluetoothSyncPlugin", dependencies: [
         .product(name: "Capacitor", package: "capacitor-swift-pm"),
