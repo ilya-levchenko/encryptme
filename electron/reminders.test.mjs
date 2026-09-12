@@ -30,7 +30,21 @@ function setup(saved = null, supported = true) {
 describe('desktop reminder service', () => {
   test('defaults to disabled and reports unsupported platforms', async () => {
     const { service } = setup(null, false);
-    expect(await service.getSettings()).toMatchObject({ journalEnabled: false, donationEnabled: false, permission: 'unsupported' });
+    expect(await service.getSettings()).toMatchObject({ journalEnabled: false, donationEnabled: true, permission: 'unsupported' });
+  });
+
+  test('enables the monthly donation schedule by default on desktop', async () => {
+    const fixture = setup();
+    await fixture.service.start();
+    expect(await fixture.service.getSettings()).toMatchObject({ donationEnabled: true, permission: 'granted' });
+    expect(fixture.startup.at(-1)).toBe(true);
+  });
+
+  test('an unsupported desktop preserves reminder preferences without enabling startup', async () => {
+    const fixture = setup(null, false);
+    const result = await fixture.service.setSettings({ journalEnabled: false, donationEnabled: true, locale: 'en', content });
+    expect(result).toMatchObject({ donationEnabled: true, permission: 'unsupported' });
+    expect(fixture.startup.at(-1)).toBe(false);
   });
 
   test('enables both schedules and hidden startup', async () => {

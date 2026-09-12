@@ -44,13 +44,13 @@ function permissionOf(value: string): ReminderPermission {
   return 'prompt';
 }
 
-function validSettings(value: unknown, now: Date): ReminderSettings {
-  if (!value || typeof value !== 'object') return defaultReminderSettings(now);
+function validSettings(value: unknown, now: Date, donationEnabled: boolean): ReminderSettings {
+  if (!value || typeof value !== 'object') return { ...defaultReminderSettings(now), donationEnabled };
   const candidate = value as Partial<ReminderSettings>;
   if (typeof candidate.journalEnabled !== 'boolean' || typeof candidate.donationEnabled !== 'boolean'
     || !candidate.lastForegroundAt || Number.isNaN(Date.parse(candidate.lastForegroundAt))
     || (candidate.donationNextAt !== null && (typeof candidate.donationNextAt !== 'string' || Number.isNaN(Date.parse(candidate.donationNextAt))))
-    || (candidate.locale !== 'ru' && candidate.locale !== 'en')) return defaultReminderSettings(now);
+    || (candidate.locale !== 'ru' && candidate.locale !== 'en')) return { ...defaultReminderSettings(now), donationEnabled };
   return candidate as ReminderSettings;
 }
 
@@ -60,8 +60,8 @@ export function createMobileReminderController({ notifications, storage, platfor
   let initialized = false;
 
   const read = () => {
-    try { return validSettings(JSON.parse(storage.getItem(STORAGE_KEY) || 'null'), now()); }
-    catch { return defaultReminderSettings(now()); }
+    try { return validSettings(JSON.parse(storage.getItem(STORAGE_KEY) || 'null'), now(), platform === 'android'); }
+    catch { return { ...defaultReminderSettings(now()), donationEnabled: platform === 'android' }; }
   };
   const write = (settings: ReminderSettings) => storage.setItem(STORAGE_KEY, JSON.stringify(settings));
   const permission = async () => permissionOf((await notifications.checkPermissions()).display);
@@ -124,23 +124,23 @@ export function createMobileReminderController({ notifications, storage, platfor
     const content = validateReminderContent(input.content);
     const previous = read();
     let currentPermission = await permission();
-    if ((input.journalEnabled || input.donationEnabled) && currentPermission !== 'granted') {
+    if (currentPermission === 'prompt') {
       currentPermission = permissionOf((await notifications.requestPermissions()).display);
-      if (currentPermission !== 'granted') {
-        const deniedSettings = { ...previous, journalEnabled: false, donationEnabled: false, donationNextAt: null, locale: input.locale };
-        await cancel(...OWNED_IDS).catch(() => undefined);
-        write(deniedSettings);
-        return { ...deniedSettings, permission: currentPermission };
-      }
     }
     const currentNow = now();
-    const settings: ReminderSettings = {
+    let settings: ReminderSettings = {
       ...previous,
       journalEnabled: Boolean(input.journalEnabled),
       donationEnabled: Boolean(input.donationEnabled),
       donationNextAt: input.donationEnabled ? previous.donationNextAt || addCalendarMonth(currentNow).toISOString() : null,
       locale: input.locale
     };
+    if (currentPermission !== 'granted') {
+      settings = { ...settings, donationNextAt: null };
+      await cancel(...OWNED_IDS).catch(() => undefined);
+      write(settings);
+      return { ...settings, permission: currentPermission };
+    }
     try {
       await createAndroidChannel();
       await cancel(...OWNED_IDS);
@@ -162,7 +162,7 @@ export function createMobileReminderController({ notifications, storage, platfor
     settings.lastForegroundAt = now().toISOString();
     settings.locale = input.locale === 'ru' ? 'ru' : 'en';
     await notifications.removeDeliveredNotificationsById?.({ ids: OWNED_IDS }).catch(() => undefined);
-    if (settings.journalEnabled) await scheduleJournal(settings, content);
+    if (settings.journalEnabled && await permission() === 'granted') await scheduleJournal(settings, content);
     write(settings);
     return { ...settings, permission: await permission() };
   }

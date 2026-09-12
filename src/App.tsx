@@ -15,7 +15,8 @@ import { createWifiSyncQrPayload } from './wifi-sync-qr';
 import { createWifiSyncQrDataUrl } from './wifi-sync-qr-image';
 import { APP_VERSION, AUTHOR_EMAIL, DONATION_ADDRESS, DONATION_URL, LICENSE_URL, SOURCE_URL, useI18n, type Language, type TranslationKey } from './i18n';
 import { reminderContent } from './reminders';
-import { reminderSettingsView } from './reminder-settings';
+import { reminderSettingsView, reminderStartupUpdate } from './reminder-settings';
+import { ReminderDonationOption } from './reminder-donation-option';
 
 type Screen = 'loading' | 'setup' | 'login' | 'diary';
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -73,7 +74,20 @@ export function App() {
   useEffect(() => { latestData.current = data; }, [data]);
   useEffect(() => window.encryptMe.onReminderAction(route => { if (route === 'donation') setReminderRoute(route); }), []);
   useEffect(() => {
-    const markForeground = () => { if (!document.hidden) void window.encryptMe.markAppForeground({ locale: language, content: reminderContent(language) }).catch(() => undefined); };
+    let running = false;
+    const markForeground = () => {
+      if (document.hidden || running) return;
+      running = true;
+      const content = reminderContent(language);
+      void window.encryptMe.getReminderSettings()
+        .then(async current => {
+          const update = reminderStartupUpdate(window.encryptMe.platform, current, language);
+          if (update) await window.encryptMe.setReminderSettings({ ...update, content });
+          await window.encryptMe.markAppForeground({ locale: language, content });
+        })
+        .catch(() => undefined)
+        .finally(() => { running = false; });
+    };
     markForeground();
     document.addEventListener('visibilitychange', markForeground);
     return () => document.removeEventListener('visibilitychange', markForeground);
@@ -522,9 +536,7 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
           <button type="button" role="switch" aria-checked={reminderView.journalEnabled} disabled={reminderBusy || reminderView.disabled} data-haptic="selection" onClick={() => void toggleReminder('journal')}>
             <span><strong>{t('journalReminder')}</strong><small>{t('journalReminderDescription')}</small></span><i className={reminderView.journalEnabled ? 'on' : ''}><b/></i>
           </button>
-          <button type="button" role="switch" aria-checked={reminderView.donationEnabled} disabled={reminderBusy || reminderView.disabled} data-haptic="selection" onClick={() => void toggleReminder('donation')}>
-            <span><strong>{t('donationReminder')}</strong><small>{t('donationReminderDescription')}</small></span><i className={reminderView.donationEnabled ? 'on' : ''}><b/></i>
-          </button>
+          <ReminderDonationOption platform={window.encryptMe.platform} checked={reminderView.donationEnabled} disabled={reminderView.disabled} busy={reminderBusy} title={t('donationReminder')} description={t('donationReminderDescription')} alwaysOn={t('donationReminderAlwaysOn')} onToggle={() => void toggleReminder('donation')} />
         </div>
         {(reminderMessage || reminderView.message) && <div className="backup-message warning">{(reminderMessage || reminderView.message) === 'denied' ? t('notificationPermissionDenied') : (reminderMessage || reminderView.message) === 'unsupported' ? t('notificationsUnsupported') : t('notificationScheduleError')}</div>}
         <div className="settings-divider" />

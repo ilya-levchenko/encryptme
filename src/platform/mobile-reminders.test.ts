@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { reminderContent } from '../reminders';
 import { createMobileReminderController } from './mobile-reminders';
 
-function setup(permission: 'prompt' | 'granted' | 'denied' = 'granted') {
+function setup(permission: 'prompt' | 'granted' | 'denied' = 'granted', platform: 'ios' | 'android' = 'android') {
   const values = new Map<string, string>();
   const scheduled: Array<{ notifications: Array<Record<string, unknown>> }> = [];
   const canceled: number[][] = [];
@@ -19,7 +19,7 @@ function setup(permission: 'prompt' | 'granted' | 'denied' = 'granted') {
   const controller = createMobileReminderController({
     notifications,
     storage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) },
-    platform: 'android',
+    platform,
     now: () => new Date('2026-09-12T10:00:00Z'),
     random: () => 0
   });
@@ -29,20 +29,38 @@ function setup(permission: 'prompt' | 'granted' | 'denied' = 'granted') {
 describe('mobile reminder controller', () => {
   test('defaults to disabled without asking permission', async () => {
     const { controller, notifications } = setup('prompt');
-    expect(await controller.getSettings()).toMatchObject({ journalEnabled: false, donationEnabled: false, permission: 'prompt' });
+    expect(await controller.getSettings()).toMatchObject({ journalEnabled: false, donationEnabled: true, permission: 'prompt' });
     expect(notifications.requestPermissions).not.toHaveBeenCalled();
   });
 
-  test('permission denial leaves requested reminders disabled', async () => {
+  test('iOS donation consent defaults off', async () => {
+    const { controller } = setup('prompt', 'ios');
+    expect(await controller.getSettings()).toMatchObject({ donationEnabled: false, permission: 'prompt' });
+  });
+
+  test('first settings activation asks permission even with reminders off', async () => {
+    const { controller, notifications } = setup('prompt', 'ios');
+    await controller.setSettings({ journalEnabled: false, donationEnabled: false, locale: 'en', content: reminderContent('en') });
+    expect(notifications.requestPermissions).toHaveBeenCalledOnce();
+  });
+
+  test('permission denial preserves requested preferences without scheduling', async () => {
     const { controller, scheduled } = setup('denied');
-    expect(await controller.setSettings({ journalEnabled: true, donationEnabled: false, locale: 'en', content: reminderContent('en') })).toMatchObject({ journalEnabled: false, donationEnabled: false, permission: 'denied' });
+    expect(await controller.setSettings({ journalEnabled: true, donationEnabled: true, locale: 'en', content: reminderContent('en') })).toMatchObject({ journalEnabled: true, donationEnabled: true, donationNextAt: null, permission: 'denied' });
     expect(scheduled).toHaveLength(0);
   });
 
   test('permission denial persists disabled switches and the requested locale', async () => {
     const { controller, values } = setup('denied');
     await controller.setSettings({ journalEnabled: true, donationEnabled: true, locale: 'ru', content: reminderContent('ru') });
-    expect(JSON.parse(values.get('encryptme:reminders') || '{}')).toMatchObject({ journalEnabled: false, donationEnabled: false, donationNextAt: null, locale: 'ru' });
+    expect(JSON.parse(values.get('encryptme:reminders') || '{}')).toMatchObject({ journalEnabled: true, donationEnabled: true, donationNextAt: null, locale: 'ru' });
+  });
+
+  test('foreground does not schedule while system permission is denied', async () => {
+    const { controller, scheduled } = setup('denied');
+    await controller.setSettings({ journalEnabled: true, donationEnabled: true, locale: 'en', content: reminderContent('en') });
+    await controller.markForeground({ locale: 'en', content: reminderContent('en') });
+    expect(scheduled).toHaveLength(0);
   });
 
   test('enables inexact journal and monthly donation schedules', async () => {

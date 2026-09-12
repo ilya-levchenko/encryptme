@@ -58,6 +58,11 @@ describe('interface localization', () => {
     expect(translate('ru', 'donationReminderDescription')).toContain('добровольной');
   });
 
+  it('explains the fixed donation-reminder policy outside iOS', () => {
+    expect(translate('en', 'donationReminderAlwaysOn').toLowerCase()).toContain('enabled by default');
+    expect(translate('ru', 'donationReminderAlwaysOn')).toContain('включено по умолчанию');
+  });
+
   it('uses correct English and Russian word forms', () => {
     expect([1, 2, 5, 11, 21].map(count => localizedWordUnit('ru', count))).toEqual(['слово', 'слова', 'слов', 'слов', 'слово']);
     expect([1, 2].map(count => localizedWordUnit('en', count))).toEqual(['word', 'words']);

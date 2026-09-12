@@ -34,6 +34,6 @@ Android cloud backup is disabled, vault files use the private application direct
 
 ## Local notifications
 
-The journal and monthly support reminders are opt-in and use Capacitor Local Notifications. EncryptMe requests `POST_NOTIFICATIONS` on Android 13+ only after the user enables a reminder. Schedules are deliberately inexact and do not request exact-alarm privileges. If permission was denied, enable notifications under **Settings → Apps → EncryptMe → Notifications**, then reopen EncryptMe.
+The journal reminder is optional; the monthly support reminder is enabled by default and has no separate in-app switch on Android. EncryptMe requests `POST_NOTIFICATIONS` on Android 13+ on the first visible launch. A denied system prompt is not shown repeatedly. Schedules use Capacitor Local Notifications, are deliberately inexact and do not request exact-alarm privileges. If permission was denied, enable notifications under **Settings → Apps → EncryptMe → Notifications**, then reopen EncryptMe.
 
 All text and scheduling metadata stay on the device. No Firebase service, push token, account identifier or diary content is transmitted.

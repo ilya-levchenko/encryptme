@@ -57,7 +57,7 @@ Physical-device testing is required before relying on BLE; simulator Bluetooth s
 
 ## Local reminders
 
-The three-day journal reminder and monthly support reminder are independent and off by default. Enabling either switch asks the operating system for notification permission. Messages are scheduled entirely on the device in Russian or English; no diary text, push token, analytics event or network service is involved.
+The mobile app asks for operating-system notification permission on its first visible launch. The three-day journal reminder remains optional. The monthly support reminder is enabled by default on Windows and Android and has no separate switch there; on iOS it remains off until the user explicitly checks the consent control and can be disabled there at any time. Messages are scheduled entirely on the device in Russian or English; no diary text, push token, analytics event or network service is involved.
 
 Opening EncryptMe resets the inactivity schedule. Windows enables hidden start-at-login while at least one reminder is active so notifications remain reliable. If permission was denied, enable notifications for EncryptMe in the operating-system settings and reopen the app.
 

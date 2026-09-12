@@ -19,7 +19,7 @@ export function validateReminderContent(value) {
 }
 
 const pick = (items, random) => items[Math.min(items.length - 1, Math.floor(Math.max(0, Math.min(.999999999, random())) * items.length))];
-const defaults = now => ({ journalEnabled: false, donationEnabled: false, lastForegroundAt: now.toISOString(), journalNextAt: null, donationNextAt: null, locale: 'en', content: null });
+const defaults = now => ({ journalEnabled: false, donationEnabled: true, lastForegroundAt: now.toISOString(), journalNextAt: null, donationNextAt: null, locale: 'en', content: null });
 const validDate = value => typeof value === 'string' && !Number.isNaN(Date.parse(value));
 const normalizeState = (value, now) => {
   if (!value || typeof value !== 'object' || typeof value.journalEnabled !== 'boolean' || typeof value.donationEnabled !== 'boolean'
@@ -99,7 +99,7 @@ export function createReminderService({ readState, writeState, isSupported, noti
     if (!['ru', 'en'].includes(input?.locale)) throw new Error('INVALID_REMINDER_LOCALE');
     const content = validateReminderContent(input.content);
     if (!isSupported()) {
-      state = { ...state, journalEnabled: false, donationEnabled: false, locale: input.locale, content };
+      state = { ...state, journalEnabled: Boolean(input.journalEnabled), donationEnabled: Boolean(input.donationEnabled), journalNextAt: null, donationNextAt: null, locale: input.locale, content };
       await persist(); setLoginStartup(false); clear('journal'); clear('donation');
       return publicState(state, 'unsupported');
     }
