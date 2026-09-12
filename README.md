@@ -18,6 +18,7 @@ Private, local-first encrypted diary for Windows, macOS, Linux, iOS and Android.
 - encrypted backup import/export compatible across desktop, iOS and Android;
 - Windows-to-phone synchronization over local Wi-Fi and QR;
 - phone-to-phone synchronization over Bluetooth Low Energy;
+- optional local reminders after three days away and monthly project-support reminders;
 - private mobile storage, iOS Data Protection and Android `FLAG_SECURE`.
 
 ## Quick start
@@ -53,6 +54,12 @@ For phone-to-phone BLE, open the same vault on both phones. Tap **Allow nearby c
 Independently created profiles are intentionally rejected. For the first shared copy, export one encrypted backup and import it on the other device.
 
 Physical-device testing is required before relying on BLE; simulator Bluetooth stacks do not represent real iPhone/Android interoperability. See [docs/bluetooth.md](docs/bluetooth.md).
+
+## Local reminders
+
+The three-day journal reminder and monthly support reminder are independent and off by default. Enabling either switch asks the operating system for notification permission. Messages are scheduled entirely on the device in Russian or English; no diary text, push token, analytics event or network service is involved.
+
+Opening EncryptMe resets the inactivity schedule. Windows enables hidden start-at-login while at least one reminder is active so notifications remain reliable. If permission was denied, enable notifications for EncryptMe in the operating-system settings and reopen the app.
 
 ## Security and storage
 

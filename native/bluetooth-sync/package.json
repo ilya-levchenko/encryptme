@@ -1,6 +1,6 @@
 {
   "name": "@encryptme/bluetooth-sync",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Private BLE transport for EncryptMe mobile sync",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",

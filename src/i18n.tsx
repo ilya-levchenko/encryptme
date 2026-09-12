@@ -6,7 +6,7 @@ export type LanguagePreference = 'system' | Language;
 type Params = Record<string, string | number>;
 
 export const DONATION_ADDRESS = 'TL7QuKcQWFcHKM9U98y9e4h9CpducJQTjg';
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.6.0';
 export const DONATION_URL = `https://tronscan.org/#/address/${DONATION_ADDRESS}`;
 export const SOURCE_URL = 'https://github.com/ilya-levchenko/encryptme';
 export const LICENSE_URL = `${SOURCE_URL}/blob/main/LICENSE`;

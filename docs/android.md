@@ -31,3 +31,9 @@ The Android workflow always builds a debug APK. When all signing secrets are pre
 ## Security settings
 
 Android cloud backup is disabled, vault files use the private application directory, and `FLAG_SECURE` prevents diary contents from appearing in screenshots and Recent Apps. Android 12+ requests Nearby Devices scan, advertise and connect permissions; Android 11 and older use location only for BLE discovery.
+
+## Local notifications
+
+The journal and monthly support reminders are opt-in and use Capacitor Local Notifications. EncryptMe requests `POST_NOTIFICATIONS` on Android 13+ only after the user enables a reminder. Schedules are deliberately inexact and do not request exact-alarm privileges. If permission was denied, enable notifications under **Settings → Apps → EncryptMe → Notifications**, then reopen EncryptMe.
+
+All text and scheduling metadata stay on the device. No Firebase service, push token, account identifier or diary content is transmitted.
