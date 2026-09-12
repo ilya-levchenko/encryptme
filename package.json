@@ -37,7 +37,7 @@
     "@capacitor/share": "^8.0.1",
     "@encryptme/bluetooth-sync": "file:native/bluetooth-sync",
     "date-fns": "^4.4.0",
-    "framer-motion": "^13.1.0",
+    "framer-motion": "^13.2.0",
     "lucide-react": "^1.31.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
