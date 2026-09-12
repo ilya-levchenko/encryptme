@@ -5,6 +5,7 @@ import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { Browser } from '@capacitor/browser';
 import { Clipboard } from '@capacitor/clipboard';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { decryptBlob, decryptContainer, deriveKey, encryptBlob, encryptContainer, FAST_KDF, fromBase64, isEncryptedContainer, isSplitContainer, isVaultContainer, SCRYPT_KDF, secureEqual, type EncryptedContainer, type SplitContainer, toBase64, type VaultKdf, usernameDigest } from './crypto';
 import { vaultStorage } from './storage';
 import { scanWifiSyncQr as scanNativeWifiSyncQr } from './qr-scanner';
@@ -12,6 +13,8 @@ import { assertAllowedExternalUrl } from './external-url';
 import { BluetoothSync, type BluetoothProgress } from './bluetooth';
 import { buildBluetoothEnvelope, openBluetoothEnvelope } from './bluetooth-protocol';
 import { mergeSplitContainers } from './sync-merge';
+import { createMobileReminderController } from './mobile-reminders';
+import { defaultReminderSettings } from '../reminders';
 
 type Profile = { version: 1; usernameHash: string; slots: ['a', 'b']; kdfSalt?: string; kdf?: VaultKdf };
 type Session = { id: string; slot: 'a' | 'b'; password: string; key: CryptoKey; container: SplitContainer; data: VaultData };
@@ -187,9 +190,15 @@ async function applyBluetoothPayload(active: Session, payload: string) {
 export function createMobileBridge(): Window['encryptMe'] {
   void initializeLifecycle();
   const nativePlatform = Capacitor.getPlatform();
+  const reminderController = nativePlatform === 'ios' || nativePlatform === 'android' ? createMobileReminderController({
+    notifications: LocalNotifications as never,
+    storage: localStorage,
+    platform: nativePlatform
+  }) : null;
+  void reminderController?.initialize();
   return {
     platform: nativePlatform === 'ios' || nativePlatform === 'android' ? nativePlatform : 'web',
-    capabilities: { wifiHost: false, wifiClient: true, qrScanner: Capacitor.isNativePlatform(), bluetoothSync: Capacitor.isNativePlatform() },
+    capabilities: { wifiHost: false, wifiClient: true, qrScanner: Capacitor.isNativePlatform(), bluetoothSync: Capacitor.isNativePlatform(), localNotifications: Boolean(reminderController) },
     async status() { return { initialized: await vaultStorage.exists(profilePath) }; },
 
     async initialize(input) {
@@ -421,6 +430,20 @@ export function createMobileBridge(): Window['encryptMe'] {
       return { ok: true };
     },
     async setLanguage() { return { ok: true }; },
+
+    async getReminderSettings() {
+      if (!reminderController) return { ...defaultReminderSettings(new Date(), nativePlatform === 'web' ? 'en' : 'en'), permission: 'unsupported' };
+      return reminderController.getSettings();
+    },
+    async setReminderSettings(input) {
+      if (!reminderController) return { ...defaultReminderSettings(new Date(), input.locale), permission: 'unsupported' };
+      return reminderController.setSettings(input);
+    },
+    async markAppForeground(input) {
+      if (!reminderController) return { ...defaultReminderSettings(new Date(), input.locale), permission: 'unsupported' };
+      return reminderController.markForeground(input);
+    },
+    onReminderAction(callback) { return reminderController?.onAction(callback) || (() => undefined); },
 
     onWindowAction(callback) { windowActions.add(callback); return () => windowActions.delete(callback); },
     async completeWindowAction() { return { ok: true }; }

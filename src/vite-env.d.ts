@@ -15,11 +15,16 @@ type VaultData = { version: number; createdAt: string; updatedAt: string; entrie
 type WifiSyncStats = { received: number; sent: number; deleted: number };
 type BluetoothPeer = { id: string; alias: string; rssi: number };
 type BluetoothProgress = { phase: 'waiting' | 'connecting' | 'sending' | 'receiving' | 'complete' | 'error'; completed: number; total: number; error?: string };
+type ReminderRoute = 'journal' | 'donation';
+type ReminderPermission = 'prompt' | 'granted' | 'denied' | 'unsupported';
+type ReminderSettings = { journalEnabled: boolean; donationEnabled: boolean; lastForegroundAt: string; donationNextAt: string | null; locale: 'ru' | 'en' };
+type ReminderContent = { title: string; journalBodies: string[]; donationBodies: string[] };
+type ReminderSettingsResult = ReminderSettings & { permission: ReminderPermission };
 
 interface Window {
   encryptMe: {
     platform: 'desktop' | 'ios' | 'android' | 'web';
-    capabilities: { wifiHost: boolean; wifiClient: boolean; qrScanner: boolean; bluetoothSync: boolean };
+    capabilities: { wifiHost: boolean; wifiClient: boolean; qrScanner: boolean; bluetoothSync: boolean; localNotifications: boolean };
     status(): Promise<{ initialized: boolean }>;
     initialize(input: { username: string; realPassword: string; decoyPassword: string; locale?: 'ru' | 'en' }): Promise<{ ok: boolean }>;
     unlock(input: { username: string; password: string }): Promise<{ sessionId: string; data: VaultData }>;
@@ -42,6 +47,10 @@ interface Window {
     copyText(text: string): Promise<{ ok: boolean }>;
     openExternal(url: string): Promise<{ ok: boolean }>;
     setLanguage(locale: 'ru' | 'en'): Promise<{ ok: boolean }>;
+    getReminderSettings(): Promise<ReminderSettingsResult>;
+    setReminderSettings(input: { journalEnabled: boolean; donationEnabled: boolean; locale: 'ru' | 'en'; content: ReminderContent }): Promise<ReminderSettingsResult>;
+    markAppForeground(input: { locale: 'ru' | 'en'; content: ReminderContent }): Promise<ReminderSettingsResult>;
+    onReminderAction(callback: (route: ReminderRoute) => void): () => void;
     onWindowAction(callback: (action: 'hide' | 'quit') => void): () => void;
     completeWindowAction(action: 'hide' | 'quit'): Promise<{ ok: boolean }>;
   };

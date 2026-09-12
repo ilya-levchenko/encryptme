@@ -10,5 +10,11 @@
   "android": {
     "backgroundColor": "#08111f",
     "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#67A9FF",
+      "presentationOptions": ["sound", "banner", "list"]
+    }
   }
 }
