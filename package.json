@@ -1,7 +1,7 @@
 {
   "name": "encryptme",
-  "version": "1.4.0",
-  "description": "EncryptMe — локальный зашифрованный личный дневник",
+  "version": "1.5.0",
+  "description": "EncryptMe — private encrypted diary for desktop, iOS and Android",
   "author": "Ilya Levchenko",
   "license": "MIT",
   "repository": {
@@ -16,6 +16,8 @@
     "build": "tsc -b && vite build",
     "build:ios": "npm run build && cap sync ios",
     "open:ios": "cap open ios",
+    "build:android": "npm run build && cap sync android && node scripts/build-android.mjs",
+    "open:android": "cap open android",
     "preview": "vite preview",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win nsis",
@@ -25,11 +27,15 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
+    "@capacitor/app-launcher": "^8.0.1",
     "@capacitor/barcode-scanner": "^3.1.2",
+    "@capacitor/browser": "^8.0.4",
+    "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.5.1",
     "@capacitor/filesystem": "^8.1.3",
     "@capacitor/haptics": "^8.0.2",
     "@capacitor/share": "^8.0.1",
+    "@encryptme/bluetooth-sync": "file:native/bluetooth-sync",
     "date-fns": "^4.4.0",
     "framer-motion": "^13.1.0",
     "lucide-react": "^1.31.0",
@@ -39,6 +45,7 @@
     "scrypt-js": "^3.0.1"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.1",
     "@capacitor/cli": "^8.5.1",
     "@capacitor/ios": "^8.5.1",
     "@types/node": "^26.2.0",

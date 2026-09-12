@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import pngToIco from 'png-to-ico';
 
@@ -27,4 +28,34 @@ await Promise.all([
   writeFile(new URL('splash-2732x2732-2.png', iosSplashDirectory), splash)
 ]);
 
-console.log('Created desktop and iOS icons');
+const androidResDirectory = new URL('../android/app/src/main/res/', import.meta.url);
+const androidDensities = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
+await Promise.all(Object.entries(androidDensities).flatMap(([density, size]) => {
+  const directory = new URL(`mipmap-${density}/`, androidResDirectory);
+  return [
+    mkdir(directory, { recursive: true }),
+    sharp(svg).resize(size, size).png().toFile(fileURL(directory, 'ic_launcher.png')),
+    sharp(svg).resize(size, size).png().toFile(fileURL(directory, 'ic_launcher_round.png')),
+    sharp(svg).resize(size * 2.25, size * 2.25).png().toFile(fileURL(directory, 'ic_launcher_foreground.png'))
+  ];
+}));
+
+const androidSplashFiles = [
+  'drawable/splash.png',
+  ...['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi'].flatMap(density => [`drawable-port-${density}/splash.png`, `drawable-land-${density}/splash.png`])
+];
+await Promise.all(androidSplashFiles.map(async relative => {
+  const target = new URL(relative, androidResDirectory);
+  const targetPath = fileURL(target);
+  const metadata = await sharp(targetPath).metadata();
+  const width = metadata.width || 480;
+  const height = metadata.height || 480;
+  const mark = await sharp(svg).resize(Math.round(Math.min(width, height) * .34)).png().toBuffer();
+  await sharp({ create: { width, height, channels: 4, background: '#08111f' } }).composite([{ input: mark, gravity: 'center' }]).png().toFile(targetPath);
+}));
+
+console.log('Created desktop, iOS and Android icons');
+
+function fileURL(directory, name = '') {
+  return fileURLToPath(new URL(name, directory));
+}

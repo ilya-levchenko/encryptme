@@ -45,9 +45,11 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>EncryptMe подключается к вашему компьютеру в локальной сети для синхронизации зашифрованных записей.</string>
+	<string>EncryptMe connects to your computer on the local network to synchronize encrypted entries.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>EncryptMe использует камеру только для сканирования QR-кода подключения к вашему компьютеру.</string>
+	<string>EncryptMe uses the camera only to scan a connection QR code.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>EncryptMe uses Bluetooth only to synchronize your encrypted vault directly with a nearby phone.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

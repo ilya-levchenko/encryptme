@@ -1,0 +1,12 @@
+{
+  "name": "@encryptme/bluetooth-sync",
+  "version": "1.5.0",
+  "description": "Private BLE transport for EncryptMe mobile sync",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": ["android/src/main/", "android/build.gradle", "ios/Sources", "Package.swift", "dist/"],
+  "license": "MIT",
+  "peerDependencies": { "@capacitor/core": ">=8.0.0" },
+  "capacitor": { "ios": { "src": "ios" }, "android": { "src": "android" } }
+}

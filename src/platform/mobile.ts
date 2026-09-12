@@ -1,10 +1,17 @@
 import { App as CapacitorApp } from '@capacitor/app';
+import { AppLauncher } from '@capacitor/app-launcher';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import { Browser } from '@capacitor/browser';
+import { Clipboard } from '@capacitor/clipboard';
 import { decryptBlob, decryptContainer, deriveKey, encryptBlob, encryptContainer, FAST_KDF, fromBase64, isEncryptedContainer, isSplitContainer, isVaultContainer, SCRYPT_KDF, secureEqual, type EncryptedContainer, type SplitContainer, toBase64, type VaultKdf, usernameDigest } from './crypto';
 import { vaultStorage } from './storage';
 import { scanWifiSyncQr as scanNativeWifiSyncQr } from './qr-scanner';
+import { assertAllowedExternalUrl } from './external-url';
+import { BluetoothSync, type BluetoothProgress } from './bluetooth';
+import { buildBluetoothEnvelope, openBluetoothEnvelope } from './bluetooth-protocol';
+import { mergeSplitContainers } from './sync-merge';
 
 type Profile = { version: 1; usernameHash: string; slots: ['a', 'b']; kdfSalt?: string; kdf?: VaultKdf };
 type Session = { id: string; slot: 'a' | 'b'; password: string; key: CryptoKey; container: SplitContainer; data: VaultData };
@@ -15,22 +22,29 @@ type BackupDocument = { format: 'encryptme-backup'; version: 1; encrypted: Encry
 const profilePath = 'vault/profile.json';
 const vaultPath = (slot: 'a' | 'b') => `vault/vault-${slot}.encryptme`;
 const windowActions = new Set<(action: 'hide' | 'quit') => void>();
+const bluetoothProgressListeners = new Set<(progress: BluetoothProgress) => void>();
+const bluetoothUpdateListeners = new Set<(update: { sessionId: string; data: VaultData; stats: WifiSyncStats }) => void>();
 let session: Session | null = null;
 let saveChain: Promise<void> = Promise.resolve();
+let bluetoothHostListener: { remove(): Promise<void> } | null = null;
+let bluetoothProgressListener: { remove(): Promise<void> } | null = null;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const shiftedDay = (offset: number) => { const value = new Date(); value.setDate(value.getDate() + offset); return value.toISOString().slice(0, 10); };
-const blankVault = (decoy = false): VaultData => {
+const blankVault = (decoy = false, locale: 'ru' | 'en' = 'ru'): VaultData => {
   const now = new Date().toISOString();
   return {
     version: 1,
     createdAt: now,
     updatedAt: now,
     settings: { autoLockMs: 60_000 },
-    entries: decoy ? [
+    entries: decoy ? (locale === 'en' ? [
+      { id: crypto.randomUUID(), date: today(), title: 'Plans for the week', content: '<p>Sort through photos, buy groceries, and choose a movie for the weekend.</p>', mood: 'calm', createdAt: now, updatedAt: now },
+      { id: crypto.randomUUID(), date: shiftedDay(-2), title: 'A short walk', content: '<p>It was quiet in the evening. I walked my usual route and picked up coffee on the way home.</p>', mood: 'good', createdAt: now, updatedAt: now }
+    ] : [
       { id: crypto.randomUUID(), date: today(), title: 'Планы на неделю', content: '<p>Разобрать фотографии, купить продукты и выбрать фильм на выходные.</p>', mood: 'calm', createdAt: now, updatedAt: now },
       { id: crypto.randomUUID(), date: shiftedDay(-2), title: 'Небольшая прогулка', content: '<p>Вечером было тихо. Прошёлся по привычному маршруту и взял кофе по дороге домой.</p>', mood: 'good', createdAt: now, updatedAt: now }
-    ] : []
+    ]) : []
   };
 };
 
@@ -122,13 +136,18 @@ async function chooseBackupFile() {
   });
 }
 
-async function exportDocument(backupDocument: BackupDocument) {
+async function exportDocument(backupDocument: BackupDocument, locale: 'ru' | 'en') {
   const fileName = `EncryptMe-backup-${today()}.encryptme-backup`;
   const contents = JSON.stringify(backupDocument);
   if (Capacitor.isNativePlatform()) {
     const path = `exports/${fileName}`;
     const result = await Filesystem.writeFile({ path, directory: Directory.Cache, encoding: Encoding.UTF8, recursive: true, data: contents });
-    await Share.share({ title: 'Резервная копия EncryptMe', text: 'Зашифрованная резервная копия', url: result.uri, dialogTitle: 'Сохранить или отправить копию' });
+    await Share.share({
+      title: locale === 'ru' ? 'Резервная копия EncryptMe' : 'EncryptMe backup',
+      text: locale === 'ru' ? 'Зашифрованная резервная копия' : 'Encrypted backup',
+      url: result.uri,
+      dialogTitle: locale === 'ru' ? 'Сохранить или отправить копию' : 'Save or share backup'
+    });
   } else {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = document.createElement('a');
@@ -143,14 +162,34 @@ async function exportDocument(backupDocument: BackupDocument) {
 async function initializeLifecycle() {
   if (!Capacitor.isNativePlatform()) return;
   await CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-    if (!isActive) windowActions.forEach(callback => callback('hide'));
+    if (!isActive) {
+      void BluetoothSync.stop().catch(() => undefined);
+      windowActions.forEach(callback => callback('hide'));
+    }
   });
+}
+
+async function ensureBluetoothProgressListener() {
+  if (bluetoothProgressListener) return;
+  bluetoothProgressListener = await BluetoothSync.addListener('progress', progress => bluetoothProgressListeners.forEach(callback => callback(progress)));
+}
+
+async function applyBluetoothPayload(active: Session, payload: string) {
+  if (session !== active) throw new Error('LOCKED');
+  const remote = await openBluetoothEnvelope(payload, active.key, active.container.salt);
+  const merged = await mergeSplitContainers(active.container, remote, active.key);
+  await vaultStorage.write(vaultPath(active.slot), merged.container);
+  active.container = merged.container;
+  active.data = merged.data;
+  return merged;
 }
 
 export function createMobileBridge(): Window['encryptMe'] {
   void initializeLifecycle();
+  const nativePlatform = Capacitor.getPlatform();
   return {
-    platform: Capacitor.isNativePlatform() ? 'mobile' : 'web',
+    platform: nativePlatform === 'ios' || nativePlatform === 'android' ? nativePlatform : 'web',
+    capabilities: { wifiHost: false, wifiClient: true, qrScanner: Capacitor.isNativePlatform(), bluetoothSync: Capacitor.isNativePlatform() },
     async status() { return { initialized: await vaultStorage.exists(profilePath) }; },
 
     async initialize(input) {
@@ -161,7 +200,8 @@ export function createMobileBridge(): Window['encryptMe'] {
       if (username.length < 2 || realPassword.length < 10 || decoyPassword.length < 10 || realPassword === decoyPassword) throw new Error('INVALID_SETUP');
       const slots: ['a' | 'b', 'a' | 'b'] = crypto.getRandomValues(new Uint8Array(1))[0] % 2 ? ['a', 'b'] : ['b', 'a'];
       const sharedSalt = crypto.getRandomValues(new Uint8Array(16));
-      const [real, decoy] = await Promise.all([createSplitVault(blankVault(), realPassword, sharedSalt), createSplitVault(blankVault(true), decoyPassword, sharedSalt)]);
+      const locale = input.locale === 'en' ? 'en' : 'ru';
+      const [real, decoy] = await Promise.all([createSplitVault(blankVault(false, locale), realPassword, sharedSalt), createSplitVault(blankVault(true, locale), decoyPassword, sharedSalt)]);
       await Promise.all([vaultStorage.write(vaultPath(slots[0]), real.container), vaultStorage.write(vaultPath(slots[1]), decoy.container)]);
       await vaultStorage.write<Profile>(profilePath, { version: 1, usernameHash: await usernameDigest(username), slots: ['a', 'b'], kdfSalt: toBase64(sharedSalt), kdf: FAST_KDF });
       return { ok: true };
@@ -249,6 +289,8 @@ export function createMobileBridge(): Window['encryptMe'] {
 
     async lock() {
       await saveChain;
+      await BluetoothSync.stop().catch(() => undefined);
+      await bluetoothHostListener?.remove().catch(() => undefined); bluetoothHostListener = null;
       if (session) session.password = '\0'.repeat(session.password.length);
       session = null;
       return { ok: true };
@@ -262,7 +304,7 @@ export function createMobileBridge(): Window['encryptMe'] {
         vaults: { a: await vaultStorage.read(vaultPath('a')), b: await vaultStorage.read(vaultPath('b')) }
       };
       const backup: BackupDocument = { format: 'encryptme-backup', version: 1, encrypted: await encryptContainer(payload, active.password) };
-      const fileName = await exportDocument(backup);
+      const fileName = await exportDocument(backup, input.locale === 'ru' ? 'ru' : 'en');
       return { canceled: false, fileName, exportedAt: new Date().toISOString(), fallback: false };
     },
 
@@ -294,7 +336,7 @@ export function createMobileBridge(): Window['encryptMe'] {
 
     async startWifiSync() { throw new Error('SYNC_HOST_UNAVAILABLE'); },
     async stopWifiSync() { return { ok: true }; },
-    async scanWifiSyncQr() { return scanNativeWifiSyncQr(); },
+    async scanWifiSyncQr(input) { return scanNativeWifiSyncQr(input?.locale === 'ru' ? 'ru' : 'en'); },
     async connectWifiSync(input) {
       const active = assertSession(input.sessionId);
       await saveChain;
@@ -323,6 +365,62 @@ export function createMobileBridge(): Window['encryptMe'] {
       } finally { window.clearTimeout(timeout); }
     },
     onWifiSyncUpdated() { return () => {}; },
+
+    async startBluetoothSync(input) {
+      const active = assertSession(input.sessionId);
+      await saveChain;
+      if (nativePlatform === 'android') await BluetoothSync.requestPermissions();
+      await BluetoothSync.stop().catch(() => undefined);
+      await bluetoothHostListener?.remove().catch(() => undefined);
+      await ensureBluetoothProgressListener();
+      const payload = await buildBluetoothEnvelope(active.container, active.key);
+      bluetoothHostListener = await BluetoothSync.addListener('hostExchange', async event => {
+        try {
+          const merged = await applyBluetoothPayload(active, event.payload);
+          bluetoothUpdateListeners.forEach(callback => callback({ sessionId: active.id, data: merged.data, stats: merged.stats }));
+        } catch (error) {
+          bluetoothProgressListeners.forEach(callback => callback({ phase: 'error', completed: 0, total: 1, error: error instanceof Error ? error.message : 'BLE_SYNC_FAILED' }));
+        }
+      });
+      const alias = crypto.getRandomValues(new Uint16Array(1))[0].toString().padStart(5, '0').slice(-5);
+      return BluetoothSync.startHost({ payload, alias });
+    },
+    async scanBluetoothPeers() {
+      if (nativePlatform === 'android') await BluetoothSync.requestPermissions();
+      await ensureBluetoothProgressListener();
+      return BluetoothSync.scan();
+    },
+    async connectBluetoothSync(input) {
+      const active = assertSession(input.sessionId);
+      await saveChain;
+      if (nativePlatform === 'android') await BluetoothSync.requestPermissions();
+      await ensureBluetoothProgressListener();
+      const payload = await buildBluetoothEnvelope(active.container, active.key);
+      const response = await BluetoothSync.connect({ deviceId: input.deviceId, payload });
+      const merged = await applyBluetoothPayload(active, response.payload);
+      return { data: merged.data, stats: merged.stats };
+    },
+    async stopBluetoothSync() {
+      await BluetoothSync.stop().catch(() => undefined);
+      await bluetoothHostListener?.remove().catch(() => undefined); bluetoothHostListener = null;
+      return { ok: true };
+    },
+    onBluetoothProgress(callback) { bluetoothProgressListeners.add(callback); return () => bluetoothProgressListeners.delete(callback); },
+    onBluetoothSyncUpdated(callback) { bluetoothUpdateListeners.add(callback); return () => bluetoothUpdateListeners.delete(callback); },
+
+    async copyText(text) {
+      if (Capacitor.isNativePlatform()) await Clipboard.write({ string: String(text) });
+      else await navigator.clipboard.writeText(String(text));
+      return { ok: true };
+    },
+    async openExternal(value) {
+      const url = assertAllowedExternalUrl(value);
+      if (Capacitor.isNativePlatform() && url.startsWith('https:')) await Browser.open({ url });
+      else if (Capacitor.isNativePlatform()) await AppLauncher.openUrl({ url });
+      else window.open(url, '_blank', 'noopener,noreferrer');
+      return { ok: true };
+    },
+    async setLanguage() { return { ok: true }; },
 
     onWindowAction(callback) { windowActions.add(callback); return () => windowActions.delete(callback); },
     async completeWindowAction() { return { ok: true }; }

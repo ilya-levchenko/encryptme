@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, cp, mkdir, stat } from 'node:fs/promises';
@@ -20,8 +20,22 @@ let pendingWindowAction = null;
 let windowActionTimer = null;
 let trayHintShown = false;
 let wifiSync = null;
+let uiLocale = 'en';
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const WIFI_SYNC_TTL_MS = 5 * 60 * 1000;
+const allowedExternalUrl = value => {
+  let url;
+  try { url = new URL(String(value || '')); } catch { throw new Error('EXTERNAL_URL_NOT_ALLOWED'); }
+  if (url.username || url.password) throw new Error('EXTERNAL_URL_NOT_ALLOWED');
+  if (url.protocol === 'mailto:' && url.pathname.toLowerCase() === 'ilya_encryptme@proton.me') return url.toString();
+  if (url.protocol === 'https:' && ['github.com', 'tronscan.org'].includes(url.hostname.toLowerCase())) return url.toString();
+  throw new Error('EXTERNAL_URL_NOT_ALLOWED');
+};
+const nativeText = {
+  en: { trayTitle: 'EncryptMe locked', trayBody: 'The app is still running in the system tray.', tooltip: 'EncryptMe — encrypted diary', open: 'Open EncryptMe', lock: 'Lock and hide', quit: 'Quit', exportTitle: 'Export encrypted backup', importTitle: 'Import encrypted backup', backup: 'EncryptMe encrypted backup' },
+  ru: { trayTitle: 'EncryptMe заблокирован', trayBody: 'Приложение продолжает работать в системном трее.', tooltip: 'EncryptMe — зашифрованный дневник', open: 'Открыть EncryptMe', lock: 'Заблокировать и скрыть', quit: 'Выход', exportTitle: 'Экспорт зашифрованной копии', importTitle: 'Импорт зашифрованной копии', backup: 'Зашифрованная копия EncryptMe' }
+};
+const tx = () => nativeText[uiLocale] || nativeText.en;
 
 const storeDir = () => path.join(app.getPath('userData'), 'vault');
 const legacyStoreDirs = () => {
@@ -158,7 +172,7 @@ async function completeWindowAction(action) {
   } else {
     mainWindow?.hide();
     if (tray && !trayHintShown) {
-      tray.displayBalloon({ title: 'EncryptMe заблокирован', content: 'Приложение продолжает работать в системном трее.', respectQuietTime: true });
+      tray.displayBalloon({ title: tx().trayTitle, content: tx().trayBody, respectQuietTime: true });
       trayHintShown = true;
     }
   }
@@ -182,15 +196,20 @@ function createTray() {
   const iconPath = path.join(app.getAppPath(), 'build', 'icon.ico');
   const icon = nativeImage.createFromPath(iconPath);
   tray = new Tray(icon);
-  tray.setToolTip('EncryptMe — зашифрованный дневник');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Открыть EncryptMe', click: showWindow },
-    { label: 'Заблокировать и скрыть', click: () => requestWindowAction('hide') },
-    { type: 'separator' },
-    { label: 'Выход', click: () => requestWindowAction('quit') }
-  ]));
+  updateTrayLanguage();
   tray.on('click', showWindow);
   tray.on('double-click', showWindow);
+}
+
+function updateTrayLanguage() {
+  if (!tray) return;
+  tray.setToolTip(tx().tooltip);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: tx().open, click: showWindow },
+    { label: tx().lock, click: () => requestWindowAction('hide') },
+    { type: 'separator' },
+    { label: tx().quit, click: () => requestWindowAction('quit') }
+  ]));
 }
 async function migrateLegacyStoreDir() {
   const currentDir = storeDir();
@@ -216,7 +235,10 @@ async function createWindow() {
     event.preventDefault();
     requestWindowAction('hide');
   });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try { void shell.openExternal(allowedExternalUrl(url)); } catch { /* deny untrusted renderer URLs */ }
+    return { action: 'deny' };
+  });
   if (devUrl) await mainWindow.loadURL(devUrl); else await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
@@ -230,7 +252,8 @@ ipcMain.handle('vault:initialize', async (_event, input) => {
   if (username.length < 2 || realPassword.length < 10 || decoyPassword.length < 10 || realPassword === decoyPassword) throw new Error('INVALID_SETUP');
   const slots = randomBytes(1)[0] % 2 ? ['a', 'b'] : ['b', 'a'];
   const sharedSalt = randomBytes(16);
-  const [real, decoy] = await Promise.all([createSplitVault(blankVault('real'), realPassword, sharedSalt), createSplitVault(blankVault('decoy'), decoyPassword, sharedSalt)]);
+  const locale = input?.locale === 'en' ? 'en' : 'ru';
+  const [real, decoy] = await Promise.all([createSplitVault(blankVault('real', locale), realPassword, sharedSalt), createSplitVault(blankVault('decoy', locale), decoyPassword, sharedSalt)]);
   real.key.fill(0); decoy.key.fill(0);
   await Promise.all([writeAtomic(vaultFile(slots[0]), real.container), writeAtomic(vaultFile(slots[1]), decoy.container)]);
   await writeAtomic(configFile(), { version: 1, usernameHash: usernameDigest(username), slots: ['a', 'b'], kdfSalt: sharedSalt.toString('base64'), kdf: FAST_KDF });
@@ -328,6 +351,9 @@ ipcMain.handle('vault:lock', async () => {
 
 ipcMain.handle('wifi-sync:start', async (_event, input) => startWifiSyncHost(String(input?.sessionId || '')));
 ipcMain.handle('wifi-sync:stop', async () => { stopWifiSync(); return { ok: true }; });
+ipcMain.handle('app:copy-text', async (_event, value) => { clipboard.writeText(String(value || '')); return { ok: true }; });
+ipcMain.handle('app:open-external', async (_event, value) => { await shell.openExternal(allowedExternalUrl(value)); return { ok: true }; });
+ipcMain.handle('app:set-language', async (_event, locale) => { uiLocale = locale === 'ru' ? 'ru' : 'en'; updateTrayLanguage(); return { ok: true }; });
 
 ipcMain.handle('app:complete-window-action', async (_event, action) => {
   if (action !== 'hide' && action !== 'quit') throw new Error('INVALID_WINDOW_ACTION');
@@ -341,10 +367,12 @@ ipcMain.handle('vault:export', async (_event, input) => {
   if (!loadedA || !loadedB) throw new Error('INCOMPLETE_VAULT');
   const backup = await createEncryptedBackup({ profile, vaults: { a: loadedA.container, b: loadedB.container } }, session.password);
   const date = new Date().toISOString().slice(0, 10);
+  const locale = input?.locale === 'ru' ? 'ru' : 'en';
+  const strings = nativeText[locale];
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Экспорт зашифрованной копии',
+    title: strings.exportTitle,
     defaultPath: `EncryptMe-backup-${date}.encryptme-backup`,
-    filters: [{ name: 'Зашифрованная копия EncryptMe', extensions: ['encryptme-backup'] }]
+    filters: [{ name: strings.backup, extensions: ['encryptme-backup'] }]
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   const destination = result.filePath.toLowerCase().endsWith('.encryptme-backup') ? result.filePath : `${result.filePath}.encryptme-backup`;
@@ -370,10 +398,12 @@ ipcMain.handle('vault:import', async (_event, input) => {
   const username = String(input?.username || '').trim();
   const password = String(input?.password || '');
   if (username.length < 2 || !password) throw new Error('INVALID_IMPORT_INPUT');
+  const locale = input?.locale === 'ru' ? 'ru' : 'en';
+  const strings = nativeText[locale];
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Импорт зашифрованной копии',
+    title: strings.importTitle,
     properties: ['openFile'],
-    filters: [{ name: 'Зашифрованная копия EncryptMe', extensions: ['encryptme-backup'] }]
+    filters: [{ name: strings.backup, extensions: ['encryptme-backup'] }]
   });
   if (result.canceled || !result.filePaths[0]) return { canceled: true };
   const source = result.filePaths[0];
@@ -398,6 +428,7 @@ ipcMain.handle('vault:import', async (_event, input) => {
 });
 
 app.whenReady().then(async () => {
+  uiLocale = app.getLocale().toLowerCase().startsWith('ru') ? 'ru' : 'en';
   await migrateLegacyStoreDir();
   await createWindow();
   createTray();

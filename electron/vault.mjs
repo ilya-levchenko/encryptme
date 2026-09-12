@@ -10,15 +10,18 @@ export const SPLIT_VERSION = 2;
 export const SCRYPT_KDF = 'scrypt-32768-8-1';
 export const FAST_KDF = 'pbkdf2-sha256-600000';
 
-export const blankVault = (kind = 'real') => ({
+export const blankVault = (kind = 'real', locale = 'ru') => ({
   version: 1,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
   settings: { autoLockMs: 60_000 },
-  entries: kind === 'decoy' ? [
+  entries: kind === 'decoy' ? (locale === 'en' ? [
+    { id: cryptoId(), date: today(), title: 'Plans for the week', content: '<p>Sort through photos, buy groceries, and choose a movie for the weekend.</p>', mood: 'calm', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: cryptoId(), date: shiftDay(-2), title: 'A short walk', content: '<p>It was quiet in the evening. I walked my usual route and picked up coffee on the way home.</p>', mood: 'good', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+  ] : [
     { id: cryptoId(), date: today(), title: 'Планы на неделю', content: '<p>Разобрать фотографии, купить продукты и выбрать фильм на выходные.</p>', mood: 'calm', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
     { id: cryptoId(), date: shiftDay(-2), title: 'Небольшая прогулка', content: '<p>Вечером было тихо. Прошёлся по привычному маршруту и взял кофе по дороге домой.</p>', mood: 'good', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
-  ] : []
+  ]) : []
 });
 
 function cryptoId() { return randomBytes(16).toString('hex'); }

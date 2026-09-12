@@ -1,34 +1,28 @@
 # EncryptMe
 
 [![CI](https://github.com/ilya-levchenko/encryptme/actions/workflows/ci.yml/badge.svg)](https://github.com/ilya-levchenko/encryptme/actions/workflows/ci.yml)
+[![Android](https://github.com/ilya-levchenko/encryptme/actions/workflows/android.yml/badge.svg)](https://github.com/ilya-levchenko/encryptme/actions/workflows/android.yml)
 [![iOS IPA](https://github.com/ilya-levchenko/encryptme/actions/workflows/ios.yml/badge.svg)](https://github.com/ilya-levchenko/encryptme/actions/workflows/ios.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-67a9ff.svg)](LICENSE)
 
-Локальный зашифрованный дневник для Windows, macOS, Linux и iOS. Один пароль открывает настоящий сейф, второй — независимый правдоподобный сейф. Облачного сервиса нет; по желанию открытый сейф можно синхронизировать напрямую между iPhone и Windows в одной Wi‑Fi-сети.
+Private, local-first encrypted diary for Windows, macOS, Linux, iOS and Android. One password opens the real vault; another opens an independent, believable decoy vault. There is no cloud account and no telemetry.
 
-## Возможности
+[Русская версия](README.ru.md)
 
-- два неразличимых зашифрованных сейфа: основной и запасной;
-- календарь и несколько записей на каждый день;
-- быстрый запуск большого дневника: записи шифруются отдельно и открываются по выбору;
-- современный форматированный редактор и анимированные скрытые фрагменты;
-- автоблокировка через 30 секунд, 1, 2 или 5 минут;
-- ручная блокировка, блокировка при закрытии окна и сворачивание в трей на desktop;
-- мгновенная блокировка и закрытие содержимого в переключателе приложений на iOS;
-- нативная тактильная отдача, плавные переходы и адаптивные стеклянные материалы на iOS;
-- совместимый между платформами зашифрованный импорт и экспорт;
-- прямая синхронизация зашифрованных записей между iPhone и Windows по QR-коду в локальной Wi‑Fi-сети;
-- полностью локальное хранение.
+## Features
 
-## Синхронизация по Wi‑Fi
+- AES-256-GCM encryption with an independently encrypted index and entries;
+- real and decoy vaults with indistinguishable storage formats;
+- calendar, multiple entries per day, rich text, animated spoilers and auto-lock;
+- English and Russian UI with system-language detection and instant switching;
+- encrypted backup import/export compatible across desktop, iOS and Android;
+- Windows-to-phone synchronization over local Wi-Fi and QR;
+- phone-to-phone synchronization over Bluetooth Low Energy;
+- private mobile storage, iOS Data Protection and Android `FLAG_SECURE`.
 
-Откройте один и тот же сейф на Windows и iPhone. На Windows в **Настройки → Синхронизация по Wi‑Fi** нажмите **Разрешить подключение**. На iPhone нажмите **Сканировать QR-код** и наведите камеру на экран компьютера — обмен начнётся автоматически. Ручной ввод адреса и 12-значного кода остаётся запасным вариантом. Окно подключения действует пять минут и закрывается после первого успешного обмена.
+## Quick start
 
-Первое подключение требует общей исходной копии сейфа: экспортируйте зашифрованную резервную копию на Windows и импортируйте её на iPhone. Настоящий и запасной сейфы синхронизируются независимо — передаются данные только сейфа, открытого текущим паролем.
-
-## Быстрый старт
-
-Требуются Node.js 22+ и npm.
+Node.js 22+ is required. Android builds also require JDK 21 and Android SDK 36; Android 8.0 (API 26) is the minimum supported device version.
 
 ```bash
 git clone https://github.com/ilya-levchenko/encryptme.git
@@ -37,47 +31,54 @@ npm ci
 npm run dev
 ```
 
-Проверка проекта: `npm run check`.
+Run all shared tests and the production web build with `npm run check`.
 
-## Сборка
+## Build targets
 
-| Платформа | Команда | Результат |
+| Platform | Command | Output |
 |---|---|---|
-| Windows | `npm run dist:win` | NSIS-установщик и portable в `release/` |
-| Текущая desktop ОС | `npm run dist` | Пакет в `release/` |
-| iOS | `npm run build:ios` | Обновлённый Xcode-проект в `ios/` |
+| Windows | `npm run dist:win` | NSIS installer and portable package in `release/` |
+| Current desktop OS | `npm run dist` | Platform package in `release/` |
+| iOS | `npm run build:ios` | Synchronized Xcode project in `ios/` |
+| Android | `npm run build:android` | Debug APK under `android/app/build/outputs/apk/debug/` |
 
-Полноценная `.ipa` собирается на macOS runner через workflow **iOS IPA**. Без секретов подписи workflow создаёт диагностическую unsigned `.ipa`; с сертификатом и provisioning profile — подписанную `.ipa`, которую опционально можно отправить в TestFlight. Настройка описана в [docs/ios.md](docs/ios.md).
+GitHub Actions produces an unsigned diagnostic IPA and an installable debug APK without secrets. Signing instructions are in [docs/ios.md](docs/ios.md) and [docs/android.md](docs/android.md).
 
-## Безопасность
+## Synchronization
 
-- AES-256-GCM с отдельным IV для индекса и каждой записи;
-- PBKDF2-HMAC-SHA-256 с 600 000 итераций для новых сейфов;
-- чтение и автоматическая миграция старых scrypt-сейфов (`N=32768`, `r=8`, `p=1`);
-- автоматическая миграция монолитных сейфов версии 1 в поэлементный формат версии 2;
-- пароль не сохраняется на диске;
-- имя профиля хранится только как SHA-256 digest;
-- сейфы и резервная копия имеют версионированный формат;
-- на iOS каталог сейфа получает `NSFileProtectionComplete`;
-- перед импортом создаётся локальная аварийная копия текущего сейфа;
-- Wi‑Fi-синхронизация принимает не более восьми попыток одноразового кода и криптографически проверяет, что второе устройство владеет ключом того же сейфа;
-- заголовки, даты и текст записей передаются только внутри уже зашифрованного контейнера.
+Windows hosts a five-minute local Wi-Fi session. In the phone app, scan its QR code; manual address and one-time-code entry remain available.
 
-EncryptMe не может восстановить забытый пароль. Подробности и модель угроз: [docs/security.md](docs/security.md). Инструкции для исследователей: [SECURITY.md](SECURITY.md).
+For phone-to-phone BLE, open the same vault on both phones. Tap **Allow nearby connection** on one and **Find nearby phone** on the other. The service advertisement contains no profile name, diary metadata or entry identifiers. The vault payload is already encrypted and wrapped in another authenticated AES-GCM envelope for the session.
 
-## Структура
+Independently created profiles are intentionally rejected. For the first shared copy, export one encrypted backup and import it on the other device.
+
+Physical-device testing is required before relying on BLE; simulator Bluetooth stacks do not represent real iPhone/Android interoperability. See [docs/bluetooth.md](docs/bluetooth.md).
+
+## Security and storage
+
+EncryptMe cannot recover a forgotten password. It does not protect an unlocked diary from a compromised operating system, keylogger or someone looking at the screen. The project has not undergone an independent cryptographic audit. Read the [security model](docs/security.md) before using it for high-risk material.
+
+The exact platform storage locations and backup behavior are documented in [docs/storage.md](docs/storage.md). Architecture details are in [docs/architecture.md](docs/architecture.md).
+
+## Project structure
 
 ```text
-src/                 React-интерфейс и общий mobile/web runtime
-electron/            изолированный desktop main process и криптооперации
-ios/                 нативный проект Capacitor/Xcode
-scripts/             сборочные утилиты и автоматизация подписи
-docs/                архитектура, безопасность и iOS-инструкции
-.github/workflows/   CI и сборка IPA
+src/                    shared React UI, encryption and sync protocol
+electron/               isolated desktop process, filesystem and Wi-Fi host
+native/bluetooth-sync/  local Capacitor BLE plugin for CoreBluetooth and Android GATT
+ios/                    Capacitor/Xcode project
+android/                Capacitor/Gradle project
+scripts/                icons and signing helpers
+docs/                   architecture, security and build guides
+.github/workflows/      desktop, iOS and Android CI
 ```
 
-Архитектурные решения описаны в [docs/architecture.md](docs/architecture.md). Участие в разработке — в [CONTRIBUTING.md](CONTRIBUTING.md).
+## Author and support
 
-## Лицензия
+Developed by **Ilya Levchenko** · [ilya_encryptme@proton.me](mailto:ilya_encryptme@proton.me)
 
-[MIT](LICENSE) © 2026 Ilya Levchenko.
+Support development with USDT on TRON (TRC20): `TL7QuKcQWFcHKM9U98y9e4h9CpducJQTjg`. Send only USDT using the TRC20 network. [View the address in TRONSCAN](https://tronscan.org/#/address/TL7QuKcQWFcHKM9U98y9e4h9CpducJQTjg).
+
+## License
+
+[MIT](LICENSE) © 2026 Ilya Levchenko. MIT permits use, modification, redistribution and commercial forks while requiring preservation of the license notice.

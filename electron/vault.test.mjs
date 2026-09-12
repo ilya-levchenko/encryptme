@@ -25,6 +25,12 @@ describe('encrypted vault', () => {
     expect(decoy.entries.every(entry => entry.title && entry.content)).toBe(true);
   });
 
+  it('localizes newly-created decoy samples', () => {
+    expect(blankVault('real', 'en').entries).toHaveLength(0);
+    expect(blankVault('decoy', 'en').entries[0].title).toBe('Plans for the week');
+    expect(blankVault('decoy', 'ru').entries[0].title).toBe('Планы на неделю');
+  });
+
   it('opens only the encrypted index and decrypts an entry on demand', async () => {
     const source = blankVault('real');
     source.entries.push({ id: 'entry-1', date: '2026-09-09', title: 'Ленивая запись', content: '<p>Содержимое по выбору</p>', mood: 'calm', createdAt: source.createdAt, updatedAt: source.updatedAt });

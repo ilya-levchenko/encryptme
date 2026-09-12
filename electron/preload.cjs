@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('encryptMe', {
   platform: 'desktop',
+  capabilities: { wifiHost: true, wifiClient: false, qrScanner: false, bluetoothSync: false },
   status: () => ipcRenderer.invoke('vault:status'),
   initialize: (input) => ipcRenderer.invoke('vault:initialize', input),
   unlock: (input) => ipcRenderer.invoke('vault:unlock', input),
@@ -19,6 +20,15 @@ contextBridge.exposeInMainWorld('encryptMe', {
     ipcRenderer.on('vault:wifi-sync-updated', listener);
     return () => ipcRenderer.removeListener('vault:wifi-sync-updated', listener);
   },
+  startBluetoothSync: () => Promise.reject(new Error('BLE_UNAVAILABLE')),
+  scanBluetoothPeers: () => Promise.resolve({ peers: [] }),
+  connectBluetoothSync: () => Promise.reject(new Error('BLE_UNAVAILABLE')),
+  stopBluetoothSync: () => Promise.resolve({ ok: true }),
+  onBluetoothProgress: () => () => {},
+  onBluetoothSyncUpdated: () => () => {},
+  copyText: (text) => ipcRenderer.invoke('app:copy-text', text),
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  setLanguage: (locale) => ipcRenderer.invoke('app:set-language', locale),
   onWindowAction: (callback) => {
     const listener = (_event, action) => callback(action);
     ipcRenderer.on('app:lock-before-window-action', listener);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUTO_LOCK_OPTIONS, getAutoLockLabel, hasBeenIdle, IDLE_TIMEOUT_MS, normalizeAutoLockMs } from './idle';
+import { AUTO_LOCK_OPTIONS, hasBeenIdle, IDLE_TIMEOUT_MS, normalizeAutoLockMs } from './idle';
 
 describe('inactivity lock', () => {
   it('stays unlocked before one minute', () => {
@@ -20,6 +20,6 @@ describe('inactivity lock', () => {
 
   it('falls back safely when an old vault has no setting', () => {
     expect(normalizeAutoLockMs(undefined)).toBe(IDLE_TIMEOUT_MS);
-    expect(getAutoLockLabel(120_000)).toBe('2 минуты');
+    expect(normalizeAutoLockMs(120_000)).toBe(120_000);
   });
 });

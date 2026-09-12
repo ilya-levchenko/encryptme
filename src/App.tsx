@@ -1,27 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Italic,
-  Download, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
+  Bluetooth, Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, ExternalLink, Info, Italic,
+  Download, Languages, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
   Redo2, RefreshCw, Save, ScanQrCode, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, Wifi, X, EyeOff
 } from 'lucide-react';
 import {
   addDays, addMonths, eachDayOfInterval, endOfMonth, endOfWeek, format, isSameDay,
   isSameMonth, isToday, parseISO, startOfMonth, startOfWeek, subMonths
 } from 'date-fns';
-import { ru } from 'date-fns/locale';
-import { AUTO_LOCK_OPTIONS, getAutoLockLabel, hasBeenIdle, IDLE_TIMEOUT_MS, normalizeAutoLockMs } from './idle';
+import { AUTO_LOCK_OPTIONS, hasBeenIdle, IDLE_TIMEOUT_MS, normalizeAutoLockMs } from './idle';
 import { formatWifiSyncCode, isCompleteWifiSyncCode, wifiSyncCodeDigits } from './wifi-sync-code';
 import { createWifiSyncQrPayload } from './wifi-sync-qr';
 import { createWifiSyncQrDataUrl } from './wifi-sync-qr-image';
+import { APP_VERSION, AUTHOR_EMAIL, DONATION_ADDRESS, DONATION_URL, LICENSE_URL, SOURCE_URL, useI18n, type Language, type TranslationKey } from './i18n';
 
 type Screen = 'loading' | 'setup' | 'login' | 'diary';
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 type LockReason = 'idle' | 'manual' | null;
-const moods: { id: DiaryEntry['mood']; label: string; dot: string }[] = [
-  { id: 'none', label: 'Без отметки', dot: 'transparent' }, { id: 'calm', label: 'Спокойно', dot: '#91a79a' },
-  { id: 'good', label: 'Хорошо', dot: '#d7aa68' }, { id: 'bright', label: 'Вдохновение', dot: '#d48061' },
-  { id: 'heavy', label: 'Тяжело', dot: '#7f83a6' }
+const moods: { id: DiaryEntry['mood']; label: TranslationKey; dot: string }[] = [
+  { id: 'none', label: 'noMood', dot: 'transparent' }, { id: 'calm', label: 'calm', dot: '#91a79a' },
+  { id: 'good', label: 'good', dot: '#d7aa68' }, { id: 'bright', label: 'inspired', dot: '#d48061' },
+  { id: 'heavy', label: 'heavy', dot: '#7f83a6' }
 ];
 
 const todayKey = () => format(new Date(), 'yyyy-MM-dd');
@@ -33,10 +33,10 @@ const plainText = (html = '') => {
   doc.body.querySelectorAll('p,div,li,blockquote').forEach(node => node.append(' '));
   return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
 };
-const countWords = (html = '') => {
+const countWords = (html = '', locale = 'en') => {
   const text = plainText(html);
   if (!text) return 0;
-  if ('Segmenter' in Intl) return [...new Intl.Segmenter('ru', { granularity: 'word' }).segment(text)].filter(part => part.isWordLike).length;
+  if ('Segmenter' in Intl) return [...new Intl.Segmenter(locale, { granularity: 'word' }).segment(text)].filter(part => part.isWordLike).length;
   return (text.match(/[\p{L}\p{N}]+(?:[-'][\p{L}\p{N}]+)*/gu) || []).length;
 };
 const sanitize = (html: string) => {
@@ -51,6 +51,7 @@ const sanitize = (html: string) => {
 };
 
 export function App() {
+  const { language } = useI18n();
   const [screen, setScreen] = useState<Screen>('loading');
   const [sessionId, setSessionId] = useState('');
   const [data, setData] = useState<VaultData>(emptyData);
@@ -113,8 +114,8 @@ export function App() {
     setSaveState('saving');
     await window.encryptMe.save({ sessionId, data: latestData.current });
     setSaveState('saved');
-    return window.encryptMe.exportBackup({ sessionId });
-  }, [sessionId]);
+    return window.encryptMe.exportBackup({ sessionId, locale: language });
+  }, [sessionId, language]);
 
   const flushForSync = useCallback(async () => {
     window.clearTimeout(saveTimer.current);
@@ -132,6 +133,9 @@ export function App() {
   }, []);
 
   useEffect(() => window.encryptMe.onWifiSyncUpdated(update => {
+    if (update.sessionId === sessionId) applySyncedData(update.data);
+  }), [sessionId, applySyncedData]);
+  useEffect(() => window.encryptMe.onBluetoothSyncUpdated(update => {
     if (update.sessionId === sessionId) applySyncedData(update.data);
   }), [sessionId, applySyncedData]);
 
@@ -174,7 +178,7 @@ export function App() {
 
   const importDialog = <AnimatePresence>{importOpen && <BackupImport onClose={() => setImportOpen(false)} onImported={finishImport} />}</AnimatePresence>;
   if (screen === 'loading') return <Loading />;
-  if (screen === 'setup') return <><Setup onDone={() => setScreen('login')} onImport={() => setImportOpen(true)} />{importDialog}</>;
+  if (screen === 'setup') return <><Setup onDone={() => setScreen('login')} onImport={() => setImportOpen(true)} locale={language} />{importDialog}</>;
   if (screen === 'login') return <><Login onUnlock={unlock} initialUsername={knownUsername} lockReason={lockReason} idleTimeoutMs={lastAutoLockMs} onImport={() => setImportOpen(true)} />{importDialog}</>;
   return <><Diary data={data} selectedDate={selectedDate} activeId={activeId} saveState={saveState}
     onDate={date => { setSelectedDate(date); const entries = data.entries.filter(e => e.date === date).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)); setActiveId(entries[0]?.id || null); }}
@@ -182,51 +186,70 @@ export function App() {
     onImport={() => void lock('manual').then(() => setImportOpen(true))} onSwitchAccount={() => void switchAccount()}
     onStartWifiSync={async () => { await flushForSync(); return window.encryptMe.startWifiSync({ sessionId }); }}
     onStopWifiSync={() => window.encryptMe.stopWifiSync()}
-    onScanWifiSyncQr={() => window.encryptMe.scanWifiSyncQr()}
-    onConnectWifiSync={async (address, code) => { await flushForSync(); const result = await window.encryptMe.connectWifiSync({ sessionId, address, code }); applySyncedData(result.data); return result; }} />{importDialog}</>;
+    onScanWifiSyncQr={() => window.encryptMe.scanWifiSyncQr({ locale: language })}
+    onConnectWifiSync={async (address, code) => { await flushForSync(); const result = await window.encryptMe.connectWifiSync({ sessionId, address, code }); applySyncedData(result.data); return result; }}
+    onStartBluetoothSync={async () => { await flushForSync(); return window.encryptMe.startBluetoothSync({ sessionId }); }}
+    onScanBluetoothPeers={() => window.encryptMe.scanBluetoothPeers()}
+    onConnectBluetoothSync={async deviceId => { await flushForSync(); const result = await window.encryptMe.connectBluetoothSync({ sessionId, deviceId }); applySyncedData(result.data); return result; }}
+    onStopBluetoothSync={() => window.encryptMe.stopBluetoothSync()} />{importDialog}</>;
 }
 
 function Brand() { return <div className="brand"><span className="brand-mark"><MoonStar size={17} /></span><span>EncryptMe</span></div>; }
+
+function AuthLanguageSelect() {
+  const { preference, setPreference, t } = useI18n();
+  return <label className="auth-language">
+    <Languages size={15} aria-hidden="true" />
+    <span className="sr-only">{t('language')}</span>
+    <select aria-label={t('language')} value={preference} onChange={event => setPreference(event.target.value as 'system' | 'ru' | 'en')}>
+      <option value="system">{t('languageSystem')}</option>
+      <option value="ru">{t('languageRussian')}</option>
+      <option value="en">{t('languageEnglish')}</option>
+    </select>
+  </label>;
+}
 
 function Loading() {
   return <main className="auth-shell"><div className="ambient" /><motion.div className="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><Brand /><span className="loader" /></motion.div></main>;
 }
 
-function Setup({ onDone, onImport }: { onDone: () => void; onImport: () => void }) {
+function Setup({ onDone, onImport, locale }: { onDone: () => void; onImport: () => void; locale: Language }) {
+  const { t } = useI18n();
   const [step, setStep] = useState(0); const [username, setUsername] = useState('');
   const [realPassword, setRealPassword] = useState(''); const [decoyPassword, setDecoyPassword] = useState('');
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const valid = username.trim().length >= 2 && realPassword.length >= 10 && decoyPassword.length >= 10 && realPassword !== decoyPassword;
   const submit = async () => {
     if (!valid) return; setBusy(true); setError('');
-      try { await window.encryptMe.initialize({ username, realPassword, decoyPassword }); onDone(); }
-    catch { setError('Не удалось создать сейф. Проверьте данные и попробуйте снова.'); setBusy(false); }
+      try { await window.encryptMe.initialize({ username, realPassword, decoyPassword, locale }); onDone(); }
+    catch { setError(t('setupError')); setBusy(false); }
   };
   return <main className="auth-shell"><div className="ambient" /><motion.section className="auth-panel setup-panel" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-    <Brand /><div className="eyebrow">Первый запуск · {step + 1} из 2</div>
+    <div className="auth-topline"><Brand /><AuthLanguageSelect /></div><div className="eyebrow">{t('setupEyebrow', { step: step + 1 })}</div>
     {step === 0 ? <>
-      <h1>Место только<br />для ваших мыслей.</h1>
-      <p className="lead">EncryptMe хранит записи локально в зашифрованном сейфе. Облака, аккаунта и восстановления пароля нет.</p>
-      <label>Имя профиля<input autoFocus value={username} onChange={e => setUsername(e.target.value)} placeholder="Например, Алекс" autoComplete="username" /></label>
-      <button className="primary" disabled={username.trim().length < 2} onClick={() => setStep(1)}>Продолжить <ChevronRight size={18} /></button>
-      <button className="restore-link" onClick={onImport}><Upload size={15}/> Восстановить резервную копию</button>
+      <h1 className="multiline">{t('setupTitleOne')}</h1>
+      <p className="lead">{t('setupLeadOne')}</p>
+      <label>{t('profileName')}<input autoFocus value={username} onChange={e => setUsername(e.target.value)} placeholder={t('profileExample')} autoComplete="username" /></label>
+      <button className="primary" disabled={username.trim().length < 2} onClick={() => setStep(1)}>{t('continue')} <ChevronRight size={18} /></button>
+      <button className="restore-link" onClick={onImport}><Upload size={15}/> {t('restoreBackup')}</button>
     </> : <>
-      <h1>Два ключа.<br />Две правды.</h1>
-      <p className="lead">Основной пароль открывает ваш дневник. Запасной — отдельный правдоподобный сейф без намёка на другое содержимое.</p>
+      <h1 className="multiline">{t('setupTitleTwo')}</h1>
+      <p className="lead">{t('setupLeadTwo')}</p>
       <div className="password-grid">
-        <label>Основной пароль<input autoFocus type="password" value={realPassword} onChange={e => setRealPassword(e.target.value)} placeholder="Минимум 10 символов" autoComplete="new-password" /></label>
-        <label>Запасной пароль<input type="password" value={decoyPassword} onChange={e => setDecoyPassword(e.target.value)} placeholder="Другой пароль" autoComplete="new-password" /></label>
+        <label>{t('mainPassword')}<input autoFocus type="password" value={realPassword} onChange={e => setRealPassword(e.target.value)} placeholder={t('minimumTen')} autoComplete="new-password" /></label>
+        <label>{t('decoyPassword')}<input type="password" value={decoyPassword} onChange={e => setDecoyPassword(e.target.value)} placeholder={t('differentPassword')} autoComplete="new-password" /></label>
       </div>
-      {realPassword && realPassword.length < 10 && <div className="hint bad">Основной пароль слишком короткий</div>}
-      {decoyPassword && realPassword === decoyPassword && <div className="hint bad">Пароли должны различаться</div>}
-      <div className="secure-note"><ShieldCheck size={18} /><span>AES‑256‑GCM · PBKDF2‑SHA‑256 · данные остаются на устройстве</span></div>
+      {realPassword && realPassword.length < 10 && <div className="hint bad">{t('mainPasswordShort')}</div>}
+      {decoyPassword && realPassword === decoyPassword && <div className="hint bad">{t('passwordsDiffer')}</div>}
+      <div className="secure-note"><ShieldCheck size={18} /><span>{t('securitySummary')}</span></div>
       {error && <div className="form-error">{error}</div>}
-      <div className="button-row"><button className="ghost" onClick={() => setStep(0)}>Назад</button><button className="primary" disabled={!valid || busy} onClick={submit}>{busy ? 'Создаём…' : 'Создать сейф'} <Sparkles size={17} /></button></div>
+      <div className="button-row"><button className="ghost" onClick={() => setStep(0)}>{t('back')}</button><button className="primary" disabled={!valid || busy} onClick={submit}>{busy ? t('creating') : t('createVault')} <Sparkles size={17} /></button></div>
     </>}
-  </motion.section><aside className="auth-quote"><span>«</span><p>Записывать — значит<br />оставаться наедине<br />с собой.</p></aside></main>;
+  </motion.section><aside className="auth-quote"><span>“</span><p className="multiline">{t('setupQuote')}</p></aside></main>;
 }
 
 function Login({ onUnlock, onImport, initialUsername = '', lockReason = null, idleTimeoutMs = IDLE_TIMEOUT_MS }: { onUnlock: (v: { sessionId: string; data: VaultData }, username: string) => void; onImport: () => void; initialUsername?: string; lockReason?: LockReason; idleTimeoutMs?: number }) {
+  const { t, autoLockLabel } = useI18n();
   const [username, setUsername] = useState(initialUsername); const [password, setPassword] = useState('');
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const [selectingAccount, setSelectingAccount] = useState(false);
@@ -236,20 +259,20 @@ function Login({ onUnlock, onImport, initialUsername = '', lockReason = null, id
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); if (!username || !password) return; setBusy(true); setError('');
     try { onUnlock(await window.encryptMe.unlock({ username, password }), username); }
-    catch { setError('Имя или пароль не подошли'); setBusy(false); }
+    catch { setError(t('invalidCredentials')); setBusy(false); }
   };
   return <main className="auth-shell"><div className="ambient" /><motion.form className="auth-panel login-panel" onSubmit={submit} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .5 }}>
-    <Brand /><div className="eyebrow">{selectingAccount ? 'Смена аккаунта' : lockReason === 'idle' ? `Автоблокировка · ${getAutoLockLabel(idleTimeoutMs)}` : lockReason ? 'Сейф защищён' : 'Личный зашифрованный дневник'}</div><h1>{selectingAccount ? 'Войти заново.' : lockReason ? 'Сейф закрыт.' : 'С возвращением.'}</h1><p className="lead">{selectingAccount ? 'Введите имя и пароль или импортируйте зашифрованную копию другого профиля.' : lockReason === 'idle' ? `Не было активности ${getAutoLockLabel(idleTimeoutMs)}. Введите пароль, чтобы продолжить.` : lockReason ? 'Введите пароль, чтобы вернуться к своим записям.' : 'Откройте свой сейф и продолжайте с того места, где остановились.'}</p>
-    {passwordOnly ? <div className="locked-profile"><LockKeyhole size={19}/><div><span>Профиль</span><strong>{username}</strong></div></div> : <label>Имя профиля<input autoFocus value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder="Ваше имя" /></label>}
-    <label>Пароль<input autoFocus={passwordOnly} type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" placeholder="••••••••••••" /></label>
+    <div className="auth-topline"><Brand /><AuthLanguageSelect /></div><div className="eyebrow">{selectingAccount ? t('switchAccountEyebrow') : lockReason === 'idle' ? t('autoLockEyebrow', { duration: autoLockLabel(idleTimeoutMs) }) : lockReason ? t('vaultProtected') : t('encryptedDiary')}</div><h1>{selectingAccount ? t('signInAgain') : lockReason ? t('vaultLocked') : t('welcomeBack')}</h1><p className="lead">{selectingAccount ? t('switchAccountLead') : lockReason === 'idle' ? t('idleLead', { duration: autoLockLabel(idleTimeoutMs) }) : lockReason ? t('unlockLead') : t('welcomeLead')}</p>
+    {passwordOnly ? <div className="locked-profile"><LockKeyhole size={19}/><div><span>{t('profile')}</span><strong>{username}</strong></div></div> : <label>{t('profileName')}<input autoFocus value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder={t('yourName')} /></label>}
+    <label>{t('password')}<input autoFocus={passwordOnly} type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" placeholder="••••••••••••" /></label>
     <AnimatePresence>{error && <motion.div className="form-error" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0 }}>{error}</motion.div>}</AnimatePresence>
-    <button className="primary wide" disabled={!username || !password || busy}>{busy ? 'Открываем…' : selectingAccount ? 'Войти' : lockReason ? 'Разблокировать' : 'Открыть дневник'} <LockKeyhole size={17} /></button>
+    <button className="primary wide" disabled={!username || !password || busy}>{busy ? t('opening') : selectingAccount ? t('signIn') : lockReason ? t('unlock') : t('openDiary')} <LockKeyhole size={17} /></button>
     <div className="login-secondary-actions">
-      {passwordOnly && <button className="restore-link" type="button" onClick={() => { setSelectingAccount(true); setUsername(''); setPassword(''); setError(''); }}><LogOut size={15}/> Сменить аккаунт</button>}
-      <button className="restore-link" type="button" onClick={onImport}><Upload size={15}/> Импортировать зашифрованную копию</button>
+      {passwordOnly && <button className="restore-link" type="button" onClick={() => { setSelectingAccount(true); setUsername(''); setPassword(''); setError(''); }}><LogOut size={15}/> {t('switchAccount')}</button>}
+      <button className="restore-link" type="button" onClick={onImport}><Upload size={15}/> {t('importEncryptedBackup')}</button>
     </div>
-    <div className="privacy"><ShieldCheck size={15} /> {locked ? 'Тип сейфа определяется только паролем' : 'Локально и зашифровано'}</div>
-  </motion.form><aside className="auth-quote"><span>«</span><p>Тишина тоже<br />становится яснее,<br />когда её записать.</p></aside></main>;
+    <div className="privacy"><ShieldCheck size={15} /> {locked ? t('vaultTypeByPassword') : t('localEncrypted')}</div>
+  </motion.form><aside className="auth-quote"><span>“</span><p className="multiline">{t('loginQuote')}</p></aside></main>;
 }
 
 type DiaryProps = {
@@ -259,19 +282,40 @@ type DiaryProps = {
   onStartWifiSync(): Promise<{ addresses: string[]; code: string; expiresAt: string }>; onStopWifiSync(): Promise<{ ok: boolean }>;
   onScanWifiSyncQr(): Promise<{ address: string; code: string }>;
   onConnectWifiSync(address: string, code: string): Promise<{ data: VaultData; stats: WifiSyncStats }>;
+  onStartBluetoothSync(): Promise<{ alias: string; expiresAt: string }>;
+  onScanBluetoothPeers(): Promise<{ peers: BluetoothPeer[] }>;
+  onConnectBluetoothSync(deviceId: string): Promise<{ data: VaultData; stats: WifiSyncStats }>;
+  onStopBluetoothSync(): Promise<{ ok: boolean }>;
 };
 
-function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onScanWifiSyncQr, onConnectWifiSync }: DiaryProps) {
+function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onScanWifiSyncQr, onConnectWifiSync, onStartBluetoothSync, onScanBluetoothPeers, onConnectBluetoothSync, onStopBluetoothSync }: DiaryProps) {
+  const { t, language, preference, setPreference, dateLocale, autoLockLabel } = useI18n();
   const [month, setMonth] = useState(parseISO(selectedDate)); const [search, setSearch] = useState(''); const [mobileNav, setMobileNav] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupState, setBackupState] = useState<'idle' | 'exporting' | 'done' | 'fallback' | 'error'>('idle');
   const [wifiState, setWifiState] = useState<'idle' | 'starting' | 'waiting' | 'scanning' | 'syncing' | 'done' | 'error'>('idle');
   const [wifiHost, setWifiHost] = useState<{ addresses: string[]; code: string; expiresAt: string } | null>(null);
   const [wifiAddress, setWifiAddress] = useState(''); const [wifiCode, setWifiCode] = useState(''); const [wifiMessage, setWifiMessage] = useState(''); const [wifiQrImage, setWifiQrImage] = useState('');
+  const [bluetoothState, setBluetoothState] = useState<'idle' | 'starting' | 'waiting' | 'searching' | 'syncing' | 'done' | 'error'>('idle');
+  const [bluetoothHost, setBluetoothHost] = useState<{ alias: string; expiresAt: string } | null>(null);
+  const [bluetoothPeers, setBluetoothPeers] = useState<BluetoothPeer[]>([]);
+  const [bluetoothMessage, setBluetoothMessage] = useState('');
+  const [bluetoothPercent, setBluetoothPercent] = useState(0);
+  const [donationCopied, setDonationCopied] = useState(false);
   useEffect(() => window.encryptMe.onWifiSyncUpdated(update => {
     const changed = update.stats.received + update.stats.sent + update.stats.deleted;
     setWifiHost(null); setWifiState('done');
-    setWifiMessage(changed ? `iPhone подключён: синхронизировано изменений — ${changed}.` : 'iPhone подключён: данные уже одинаковые.');
-  }), []);
+    setWifiMessage(changed ? t('syncHostChanged', { count: changed }) : t('syncHostSame'));
+  }), [t]);
+  useEffect(() => window.encryptMe.onBluetoothProgress(progress => {
+    if (progress.total > 0) setBluetoothPercent(Math.min(100, Math.round(progress.completed / progress.total * 100)));
+    if (progress.phase === 'complete') setBluetoothState('done');
+    if (progress.phase === 'error') { setBluetoothState('error'); setBluetoothMessage(bluetoothError(progress.error || 'BLE_SYNC_FAILED')); }
+  }), [t]);
+  useEffect(() => window.encryptMe.onBluetoothSyncUpdated(update => {
+    const changed = update.stats.received + update.stats.sent + update.stats.deleted;
+    setBluetoothState('done'); setBluetoothHost(null);
+    setBluetoothMessage(changed ? t('syncDoneChanged', { count: changed }) : t('syncAlreadySame'));
+  }), [t]);
   const autoLockMs = normalizeAutoLockMs(data.settings?.autoLockMs);
   const dayEntries = useMemo(() => data.entries.filter(e => e.date === selectedDate).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)), [data.entries, selectedDate]);
   const active = data.entries.find(e => e.id === activeId) || null;
@@ -286,7 +330,7 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     onChange({ ...data, sync: { ...data.sync, tombstones }, entries: data.entries.map(e => e.id === active.id ? { ...e, ...patch, updatedAt: new Date().toISOString() } : e) });
   };
   const remove = () => {
-    if (!active || !confirm('Удалить эту запись? Это действие нельзя отменить.')) return;
+    if (!active || !confirm(t('deleteConfirm'))) return;
     const rest = data.entries.filter(e => e.id !== active.id); const deletedAt = new Date().toISOString();
     onChange({ ...data, entries: rest, sync: { ...data.sync, tombstones: { ...(data.sync?.tombstones || {}), [active.id]: deletedAt } } }); onActive(rest.find(e => e.date === selectedDate)?.id || '');
   };
@@ -298,13 +342,21 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
   };
   const wifiError = (reason: unknown) => {
     const message = String(reason);
-    if (message.includes('INVALID_SYNC_CODE')) return 'Код подключения не подошёл.';
-    if (message.includes('SYNC_VAULT_MISMATCH')) return 'На устройствах открыты разные сейфы. Сначала импортируйте одну резервную копию.';
-    if (message.includes('SYNC_TIMEOUT') || message.includes('Failed to fetch')) return 'Компьютер не отвечает. Проверьте Wi‑Fi, адрес и разрешение брандмауэра.';
-    if (message.includes('INVALID_SYNC_ADDRESS')) return 'Введите адрес, показанный на компьютере.';
-    if (message.includes('INVALID_SYNC_QR')) return 'Это не QR-код подключения EncryptMe.';
-    if (/permission|denied|camera/i.test(message)) return 'Разрешите EncryptMe доступ к камере в настройках iPhone.';
-    return 'Не удалось выполнить синхронизацию.';
+    if (message.includes('INVALID_SYNC_CODE')) return t('syncCodeWrong');
+    if (message.includes('SYNC_VAULT_MISMATCH')) return t('syncVaultMismatch');
+    if (message.includes('SYNC_TIMEOUT') || message.includes('Failed to fetch')) return t('syncTimeout');
+    if (message.includes('INVALID_SYNC_ADDRESS')) return t('syncAddressInvalid');
+    if (message.includes('INVALID_SYNC_QR')) return t('syncQrInvalid');
+    if (/permission|denied|camera/i.test(message)) return t('cameraPermission');
+    return t('syncFailed');
+  };
+  const bluetoothError = (reason: unknown) => {
+    const message = String(reason);
+    if (message.includes('SYNC_VAULT_MISMATCH')) return t('bluetoothDifferentVault');
+    if (/permission|denied/i.test(message)) return t('bluetoothPermission');
+    if (/unavailable|poweredOff|off/i.test(message)) return t('bluetoothOff');
+    if (/PEER_NOT_FOUND|SERVICE_NOT_FOUND/i.test(message)) return t('bluetoothNoPeers');
+    return t('syncFailed');
   };
   const startWifi = async () => {
     setWifiState('starting'); setWifiMessage('');
@@ -312,15 +364,16 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     catch (reason) { setWifiMessage(wifiError(reason)); setWifiState('error'); }
   };
   const stopWifi = async () => { await onStopWifiSync(); setWifiHost(null); setWifiState('idle'); setWifiMessage(''); };
-  const closeSettings = () => { if (wifiHost) void stopWifi(); setSettingsOpen(false); };
+  const stopBluetooth = async () => { await onStopBluetoothSync(); setBluetoothHost(null); setBluetoothPeers([]); setBluetoothState('idle'); setBluetoothMessage(''); setBluetoothPercent(0); };
+  const closeSettings = () => { if (wifiHost) void stopWifi(); if (bluetoothHost || bluetoothState === 'syncing' || bluetoothState === 'searching') void stopBluetooth(); setSettingsOpen(false); };
   const connectWifi = async (address = wifiAddress, code = wifiCode) => {
-    if (!address.trim()) { setWifiState('error'); setWifiMessage('Введите адрес, показанный на компьютере.'); return; }
-    if (!isCompleteWifiSyncCode(code)) { setWifiState('error'); setWifiMessage('Введите все 12 цифр одноразового кода.'); return; }
+    if (!address.trim()) { setWifiState('error'); setWifiMessage(t('syncAddressRequired')); return; }
+    if (!isCompleteWifiSyncCode(code)) { setWifiState('error'); setWifiMessage(t('syncCodeRequired')); return; }
     setWifiState('syncing'); setWifiMessage('');
     try {
       const result = await onConnectWifiSync(address, code);
       const changed = result.stats.received + result.stats.sent + result.stats.deleted;
-      setWifiMessage(changed ? `Готово: синхронизировано изменений — ${changed}.` : 'Готово: на устройствах уже одинаковые данные.'); setWifiState('done'); setWifiCode('');
+      setWifiMessage(changed ? t('syncDoneChanged', { count: changed }) : t('syncAlreadySame')); setWifiState('done'); setWifiCode('');
     } catch (reason) { setWifiMessage(wifiError(reason)); setWifiState('error'); }
   };
   const scanWifi = async () => {
@@ -333,6 +386,29 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
       if (String(reason).includes('QR_SCAN_CANCELLED')) { setWifiState('idle'); return; }
       setWifiMessage(wifiError(reason)); setWifiState('error');
     }
+  };
+  const startBluetooth = async () => {
+    setBluetoothState('starting'); setBluetoothMessage(''); setBluetoothPeers([]);
+    try { const host = await onStartBluetoothSync(); setBluetoothHost(host); setBluetoothState('waiting'); }
+    catch (reason) { setBluetoothState('error'); setBluetoothMessage(bluetoothError(reason)); }
+  };
+  const connectBluetooth = async (deviceId: string) => {
+    setBluetoothState('syncing'); setBluetoothMessage(''); setBluetoothPercent(0);
+    try {
+      const result = await onConnectBluetoothSync(deviceId);
+      const changed = result.stats.received + result.stats.sent + result.stats.deleted;
+      setBluetoothState('done'); setBluetoothPeers([]); setBluetoothMessage(changed ? t('syncDoneChanged', { count: changed }) : t('syncAlreadySame'));
+    } catch (reason) { setBluetoothState('error'); setBluetoothMessage(bluetoothError(reason)); }
+  };
+  const scanBluetooth = async () => {
+    setBluetoothState('searching'); setBluetoothMessage(''); setBluetoothPeers([]);
+    try {
+      const result = await onScanBluetoothPeers();
+      setBluetoothPeers(result.peers);
+      if (result.peers.length === 1) await connectBluetooth(result.peers[0].id);
+      else if (!result.peers.length) { setBluetoothState('error'); setBluetoothMessage(t('bluetoothNoPeers')); }
+      else setBluetoothState('idle');
+    } catch (reason) { setBluetoothState('error'); setBluetoothMessage(bluetoothError(reason)); }
   };
   useEffect(() => {
     if (!wifiHost?.addresses[0]) { setWifiQrImage(''); return; }
@@ -347,74 +423,106 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
   useEffect(() => {
     if (!wifiHost) return;
     const remaining = Math.max(0, Date.parse(wifiHost.expiresAt) - Date.now());
-    const timer = window.setTimeout(() => { setWifiHost(null); setWifiState('error'); setWifiMessage('Время подключения истекло. Создайте новый код.'); }, remaining);
+    const timer = window.setTimeout(() => { setWifiHost(null); setWifiState('error'); setWifiMessage(t('syncExpired')); }, remaining);
     return () => window.clearTimeout(timer);
-  }, [wifiHost]);
+  }, [wifiHost, t]);
+  const copyDonation = async () => {
+    await window.encryptMe.copyText(DONATION_ADDRESS);
+    setDonationCopied(true);
+    window.setTimeout(() => setDonationCopied(false), 1800);
+  };
   return <main className="app-shell">
-    <header className="mobile-header"><div className="mobile-header-actions"><button onClick={() => setMobileNav(true)} aria-label="Меню"><Menu /></button><button onClick={() => setSettingsOpen(true)} aria-label="Настройки"><Settings2 /></button></div><Brand /><SaveIndicator state={saveState} /></header>
+    <header className="mobile-header"><div className="mobile-header-actions"><button onClick={() => setMobileNav(true)} aria-label={t('menu')}><Menu /></button><button onClick={() => setSettingsOpen(true)} aria-label={t('settings')}><Settings2 /></button></div><Brand /><SaveIndicator state={saveState} /></header>
     <AnimatePresence>{mobileNav && <motion.div className="mobile-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onClick={() => setMobileNav(false)} />}</AnimatePresence>
     <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}>
       <div className="sidebar-top"><Brand /><button className="icon-button mobile-close" onClick={() => setMobileNav(false)}><X size={18}/></button></div>
-      <div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Найти в записях" /></div>
+      <div className="search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder={t('searchEntries')} /></div>
       {search ? <SearchResults entries={filtered} onPick={e => { onDate(e.date); onActive(e.id); setSearch(''); setMobileNav(false); }} /> : <>
         <Calendar month={month} selected={selectedDate} entries={data.entries} onMonth={setMonth} onDate={date => { onDate(date); setMobileNav(false); }} />
-        <div className="sidebar-section-title"><span>Записи дня</span><span>{dayEntries.length}</span></div>
+        <div className="sidebar-section-title"><span>{t('dayEntries')}</span><span>{dayEntries.length}</span></div>
         <div className="entry-list">
           {dayEntries.map(entry => <EntryRow key={entry.id} entry={entry} active={entry.id === activeId} onClick={() => { onActive(entry.id); setMobileNav(false); }} />)}
-          {!dayEntries.length && <div className="empty-day">В этот день пока тихо.</div>}
+          {!dayEntries.length && <div className="empty-day">{t('quietDay')}</div>}
         </div>
       </>}
-      <div className="sidebar-footer"><button onClick={onLock}><LogOut size={17} /> Закрыть сейф</button><button className="auto-lock-status" onClick={() => setSettingsOpen(true)} title="Настроить автоблокировку"><LockKeyhole size={13}/> {getAutoLockLabel(autoLockMs)}</button></div>
+      <div className="sidebar-footer"><button onClick={onLock}><LogOut size={17} /> {t('closeVault')}</button><button className="auto-lock-status" onClick={() => setSettingsOpen(true)} title={t('configureAutoLock')}><LockKeyhole size={13}/> {autoLockLabel(autoLockMs)}</button></div>
     </aside>
     <section className="workspace">
-      <div className="workspace-bar"><div><CalendarDays size={16}/><span>{format(parseISO(selectedDate), 'd MMMM yyyy', { locale: ru })}</span></div><SaveIndicator state={saveState} /><button className="workspace-icon" onClick={() => setSettingsOpen(true)} title="Настройки" aria-label="Настройки"><Settings2 size={17}/></button><button className="workspace-icon lock-now" onClick={onLock} title="Заблокировать сейчас" aria-label="Заблокировать сейчас"><LockKeyhole size={17}/></button><button className="new-entry" onClick={create}><Plus size={17}/><span>Новая запись</span></button></div>
+      <div className="workspace-bar"><div><CalendarDays size={16}/><span>{format(parseISO(selectedDate), 'd MMMM yyyy', { locale: dateLocale })}</span></div><SaveIndicator state={saveState} /><button className="workspace-icon" onClick={() => setSettingsOpen(true)} title={t('settings')} aria-label={t('settings')}><Settings2 size={17}/></button><button className="workspace-icon lock-now" onClick={onLock} title={t('lockNow')} aria-label={t('lockNow')}><LockKeyhole size={17}/></button><button className="new-entry" onClick={create}><Plus size={17}/><span>{t('newEntry')}</span></button></div>
       <DateCarousel selected={selectedDate} entries={data.entries} onDate={onDate} />
       <MobileDayEntries entries={dayEntries} activeId={activeId} onPick={onActive} onCreate={create} />
       <AnimatePresence mode="wait">{active ? (typeof active.content === 'string' ? <Editor key={active.id} entry={active} onUpdate={update} onDelete={remove} /> : <EntryLoading key={`loading-${active.id}`} />) : <EmptyEditor date={selectedDate} onCreate={create} />}</AnimatePresence>
     </section>
     <AnimatePresence>{settingsOpen && <motion.div className="settings-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onMouseDown={closeSettings}>
       <motion.section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:10,scale:.985}} transition={{duration:.2}} onMouseDown={e => e.stopPropagation()}>
-        <div className="settings-heading"><div className="settings-symbol"><Settings2 size={19}/></div><div><span>Настройки защиты</span><h2 id="settings-title">Автоблокировка</h2></div><button onClick={closeSettings} aria-label="Закрыть настройки"><X size={18}/></button></div>
-        <p>Сейф закроется, если в приложении не было клавиатуры, мыши или касаний.</p>
-        <div className="lock-options" role="radiogroup" aria-label="Время автоблокировки">{AUTO_LOCK_OPTIONS.map(option => <button key={option.value} role="radio" aria-checked={autoLockMs === option.value} className={autoLockMs === option.value ? 'selected' : ''} onClick={() => updateAutoLock(option.value)}><span>{option.label}</span><i/></button>)}</div>
-        <div className="settings-note"><ShieldCheck size={15}/><span>Настройка хранится внутри текущего зашифрованного сейфа.</span></div>
+        <div className="settings-heading"><div className="settings-symbol"><Settings2 size={19}/></div><div><span>{t('settingsKicker')}</span><h2 id="settings-title">{t('settingsTitle')}</h2></div><button onClick={closeSettings} aria-label={t('closeSettings')}><X size={18}/></button></div>
+        <div className="settings-section-title"><Languages size={15}/><span>{t('language')}</span></div>
+        <p className="settings-section-copy">{t('languageDescription')}</p>
+        <div className="language-options" role="radiogroup" aria-label={t('language')}>{(['system','ru','en'] as const).map(option => <button key={option} role="radio" aria-checked={preference === option} className={preference === option ? 'selected' : ''} onClick={() => setPreference(option)}>{option === 'system' ? t('languageSystem') : option === 'ru' ? t('languageRussian') : t('languageEnglish')}</button>)}</div>
         <div className="settings-divider" />
-        <div className="settings-subheading"><span>Резервная копия</span><p>Оба сейфа и профиль в одном файле, дополнительно защищённом текущим паролем.</p></div>
+        <div className="settings-section-title"><ShieldCheck size={15}/><span>{t('protection')}</span></div>
+        <div className="settings-subheading"><span>{t('autoLock')}</span><p>{t('autoLockDescription')}</p></div>
+        <div className="lock-options" role="radiogroup" aria-label={t('autoLockGroup')}>{AUTO_LOCK_OPTIONS.map(option => <button key={option.value} role="radio" aria-checked={autoLockMs === option.value} className={autoLockMs === option.value ? 'selected' : ''} onClick={() => updateAutoLock(option.value)}><span>{autoLockLabel(option.value)}</span><i/></button>)}</div>
+        <div className="settings-note"><ShieldCheck size={15}/><span>{t('settingEncrypted')}</span></div>
+        <div className="settings-divider" />
+        <div className="settings-subheading"><span>{t('backup')}</span><p>{t('backupDescription')}</p></div>
         <div className="backup-actions">
-          <button onClick={handleExport} disabled={backupState === 'exporting'}><Download size={18}/><span><strong>{backupState === 'exporting' ? 'Шифруем…' : 'Экспортировать'}</strong><small>Сохранить файл .encryptme-backup</small></span></button>
-          <button onClick={onImport}><Upload size={18}/><span><strong>Импортировать</strong><small>Заменить данные из копии</small></span></button>
+          <button onClick={handleExport} disabled={backupState === 'exporting'}><Download size={18}/><span><strong>{backupState === 'exporting' ? t('encrypting') : t('export')}</strong><small>{t('exportHint')}</small></span></button>
+          <button onClick={onImport}><Upload size={18}/><span><strong>{t('import')}</strong><small>{t('importHint')}</small></span></button>
         </div>
-        {backupState === 'done' && <div className="backup-message success">Зашифрованная копия сохранена.</div>}
-        {backupState === 'fallback' && <div className="backup-message warning">Выбранная папка недоступна. Копия сохранена в папке EncryptMe — она уже открыта.</div>}
-        {backupState === 'error' && <div className="backup-message error">Не удалось записать файл. Проверьте свободное место и попробуйте другую папку.</div>}
+        {backupState === 'done' && <div className="backup-message success">{t('backupSaved')}</div>}
+        {backupState === 'fallback' && <div className="backup-message warning">{t('backupFallback')}</div>}
+        {backupState === 'error' && <div className="backup-message error">{t('backupWriteError')}</div>}
         <div className="settings-divider" />
-        <div className="settings-subheading"><span>Синхронизация по Wi‑Fi</span><p>Передаются только зашифрованные данные открытого сейфа. Оба устройства должны быть в одной сети.</p></div>
+        <div className="settings-subheading"><span>{t('wifiSync')}</span><p>{t('wifiDescription')}</p></div>
         {window.encryptMe.platform === 'desktop' ? <div className="wifi-sync-panel">
-          {!wifiHost ? <button className="wifi-primary" onClick={startWifi} disabled={wifiState === 'starting'}><Wifi size={18}/><span><strong>{wifiState === 'starting' ? 'Запускаем…' : 'Разрешить подключение'}</strong><small>Открыть одноразовый сеанс на 5 минут</small></span></button> : <motion.div className="wifi-host" initial={{opacity:0,y:5}} animate={{opacity:1,y:0}}>
-            <div className="wifi-live"><i/><span>Ожидание iPhone</span><button onClick={stopWifi}>Остановить</button></div>
-            {wifiQrImage && <motion.div className="wifi-qr" initial={{opacity:0,scale:.96}} animate={{opacity:1,scale:1}}><img src={wifiQrImage} alt="QR-код подключения EncryptMe"/><span>Сканируйте в EncryptMe на iPhone</span></motion.div>}
-            <label>Адрес компьютера<strong>{wifiHost.addresses[0] || 'Локальный адрес не найден'}</strong></label>
-            {wifiHost.addresses.length > 1 && <small className="wifi-alternate">Другие адреса: {wifiHost.addresses.slice(1).join(' · ')}</small>}
-            <label>Одноразовый код<strong className="wifi-code">{wifiHost.code}</strong></label>
+          {!wifiHost ? <button className="wifi-primary" onClick={startWifi} disabled={wifiState === 'starting'}><Wifi size={18}/><span><strong>{wifiState === 'starting' ? t('starting') : t('allowConnection')}</strong><small>{t('allowFiveMinutes')}</small></span></button> : <motion.div className="wifi-host" initial={{opacity:0,y:5}} animate={{opacity:1,y:0}}>
+            <div className="wifi-live"><i/><span>{t('waitingPhone')}</span><button onClick={stopWifi}>{t('stop')}</button></div>
+            {wifiQrImage && <motion.div className="wifi-qr" initial={{opacity:0,scale:.96}} animate={{opacity:1,scale:1}}><img src={wifiQrImage} alt="EncryptMe connection QR code"/><span>{t('scanInPhone')}</span></motion.div>}
+            <label>{t('computerAddress')}<strong>{wifiHost.addresses[0] || t('localAddressMissing')}</strong></label>
+            {wifiHost.addresses.length > 1 && <small className="wifi-alternate">{t('otherAddresses', { addresses: wifiHost.addresses.slice(1).join(' · ') })}</small>}
+            <label>{t('oneTimeCode')}<strong className="wifi-code">{wifiHost.code}</strong></label>
           </motion.div>}
         </div> : <div className="wifi-client">
-          <button className="wifi-primary wifi-scan" onClick={scanWifi} disabled={wifiState === 'scanning' || wifiState === 'syncing'}><ScanQrCode size={20}/><span><strong>{wifiState === 'scanning' ? 'Открываем камеру…' : 'Сканировать QR-код'}</strong><small>Синхронизация начнётся автоматически</small></span></button>
-          <div className="wifi-manual-divider"><span>или вручную</span></div>
-          <label>Адрес с компьютера<input value={wifiAddress} onChange={event => setWifiAddress(event.target.value)} inputMode="url" autoCapitalize="none" placeholder="http://192.168.1.10:12345" /></label>
-          <label>Одноразовый код<input value={wifiCode} onChange={event => { setWifiCode(formatWifiSyncCode(event.target.value)); if (wifiState === 'error') setWifiMessage(''); }} inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" enterKeyHint="done" maxLength={14} placeholder="1234-5678-9012" /><small>{wifiSyncCodeDigits(wifiCode).length} из 12 цифр</small></label>
-          <button className="wifi-primary" onClick={() => void connectWifi()} disabled={wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? 'Синхронизируем…' : 'Синхронизировать'}</strong><small>Подключиться к EncryptMe на Windows</small></span></button>
+          <button className="wifi-primary wifi-scan" onClick={scanWifi} disabled={wifiState === 'scanning' || wifiState === 'syncing'}><ScanQrCode size={20}/><span><strong>{wifiState === 'scanning' ? t('openingCamera') : t('scanQr')}</strong><small>{t('syncStartsAutomatically')}</small></span></button>
+          <div className="wifi-manual-divider"><span>{t('orManually')}</span></div>
+          <label>{t('addressFromComputer')}<input value={wifiAddress} onChange={event => setWifiAddress(event.target.value)} inputMode="url" autoCapitalize="none" placeholder="http://192.168.1.10:12345" /></label>
+          <label>{t('oneTimeCode')}<input value={wifiCode} onChange={event => { setWifiCode(formatWifiSyncCode(event.target.value)); if (wifiState === 'error') setWifiMessage(''); }} inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" enterKeyHint="done" maxLength={14} placeholder="1234-5678-9012" /><small>{t('digitsOfTwelve', { count: wifiSyncCodeDigits(wifiCode).length })}</small></label>
+          <button className="wifi-primary" onClick={() => void connectWifi()} disabled={wifiState === 'syncing'}><RefreshCw size={18}/><span><strong>{wifiState === 'syncing' ? t('syncing') : t('synchronize')}</strong><small>{t('connectWindows')}</small></span></button>
         </div>}
         {wifiMessage && <div className={`backup-message ${wifiState === 'done' ? 'success' : 'error'}`}>{wifiMessage}</div>}
+        {window.encryptMe.capabilities.bluetoothSync && <>
+          <div className="settings-divider" />
+          <div className="settings-subheading"><span>{t('bluetoothSync')}</span><p>{t('bluetoothDescription')}</p></div>
+          <div className="bluetooth-actions">
+            {!bluetoothHost ? <button className="wifi-primary" onClick={() => void startBluetooth()} disabled={bluetoothState === 'starting' || bluetoothState === 'syncing'}><Bluetooth size={19}/><span><strong>{bluetoothState === 'starting' ? t('starting') : t('bluetoothAdvertise')}</strong><small>{t('allowFiveMinutes')}</small></span></button>
+              : <div className="bluetooth-host"><span className="bluetooth-pulse"><Bluetooth size={17}/></span><div><strong>{t('bluetoothWaiting', { code: bluetoothHost.alias })}</strong><small>{t('allowFiveMinutes')}</small></div><button onClick={() => void stopBluetooth()}>{t('stop')}</button></div>}
+            {!bluetoothHost && <button className="wifi-primary" onClick={() => void scanBluetooth()} disabled={bluetoothState === 'searching' || bluetoothState === 'syncing'}><Search size={19}/><span><strong>{bluetoothState === 'searching' ? t('bluetoothSearching') : t('bluetoothFind')}</strong><small>{t('bluetoothDescription')}</small></span></button>}
+          </div>
+          {bluetoothPeers.length > 1 && <div className="bluetooth-peers">{bluetoothPeers.map(peer => <button key={peer.id} onClick={() => void connectBluetooth(peer.id)}><Bluetooth size={16}/><span>EncryptMe {peer.alias}</span><small>{peer.rssi} dBm</small></button>)}</div>}
+          {bluetoothState === 'syncing' && <div className="bluetooth-progress"><i style={{ width: `${bluetoothPercent}%` }}/><span>{t('bluetoothProgress', { progress: bluetoothPercent })}</span><button onClick={() => void stopBluetooth()}>{t('bluetoothCancel')}</button></div>}
+          {bluetoothMessage && <div className={`backup-message ${bluetoothState === 'done' ? 'success' : 'error'}`}>{bluetoothMessage}</div>}
+        </>}
         <div className="settings-divider" />
-        <div className="settings-subheading"><span>Аккаунт</span><p>Закрыть текущий сейф и вернуться к полному экрану входа или импорту другой копии.</p></div>
-        <button className="account-switch" onClick={onSwitchAccount}><LogOut size={17}/><span><strong>Сменить аккаунт</strong><small>Выйти и выбрать способ входа</small></span><ChevronRight size={16}/></button>
-        <button className="primary settings-done" onClick={closeSettings}>Готово</button>
+        <div className="settings-subheading"><span>{t('account')}</span><p>{t('accountDescription')}</p></div>
+        <button className="account-switch" onClick={onSwitchAccount}><LogOut size={17}/><span><strong>{t('switchAccount')}</strong><small>{t('switchAccountHint')}</small></span><ChevronRight size={16}/></button>
+        <div className="settings-divider" />
+        <div className="settings-section-title"><Info size={15}/><span>{t('about')}</span></div>
+        <div className="about-block">
+          <div className="about-product"><Brand/><small>{t('version', { version: APP_VERSION })}</small></div>
+          <dl><div><dt>{t('developedBy')}</dt><dd>Ilya Levchenko</dd></div><div><dt>{t('contact')}</dt><dd><button onClick={() => window.encryptMe.openExternal(`mailto:${AUTHOR_EMAIL}`)}>{AUTHOR_EMAIL}<ExternalLink size={13}/></button></dd></div></dl>
+          <div className="about-links"><button onClick={() => window.encryptMe.openExternal(SOURCE_URL)}>{t('sourceCode')}<ExternalLink size={13}/></button><button onClick={() => window.encryptMe.openExternal(LICENSE_URL)}>{t('license')}<ExternalLink size={13}/></button></div>
+          <div className="donation"><strong>{t('supportDevelopment')}</strong><span>{t('donationNetwork')}</span><code>{DONATION_ADDRESS}</code><small>{t('donationWarning')}</small><div><button onClick={() => void copyDonation()}><Copy size={14}/>{donationCopied ? t('copied') : t('copyAddress')}</button><button onClick={() => window.encryptMe.openExternal(DONATION_URL)}>{t('viewTronscan')}<ExternalLink size={13}/></button></div></div>
+          <small className="copyright">© 2026 Ilya Levchenko</small>
+        </div>
+        <button className="primary settings-done" onClick={closeSettings}>{t('done')}</button>
       </motion.section>
     </motion.div>}</AnimatePresence>
   </main>;
 }
 
 function BackupImport({ onClose, onImported }: { onClose(): void; onImported(username: string): void }) {
+  const { t, language } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -424,89 +532,98 @@ function BackupImport({ onClose, onImported }: { onClose(): void; onImported(use
     if (username.trim().length < 2 || !password) return;
     setBusy(true); setError('');
     try {
-      const result = await window.encryptMe.importBackup({ username, password });
+      const result = await window.encryptMe.importBackup({ username, password, locale: language });
       if (result.canceled) { setBusy(false); return; }
       onImported(username);
     } catch (reason) {
       const message = String(reason);
-      if (message.includes('BACKUP_PROFILE_MISMATCH')) setError('Имя профиля не совпадает с резервной копией.');
-      else if (message.includes('INVALID_BACKUP_PASSWORD')) setError('Пароль не подошёл или файл повреждён.');
-      else if (message.includes('BACKUP_TOO_LARGE')) setError('Файл резервной копии слишком большой.');
-      else setError('Не удалось импортировать файл. Проверьте, что это копия EncryptMe.');
+      if (message.includes('BACKUP_PROFILE_MISMATCH')) setError(t('importProfileMismatch'));
+      else if (message.includes('INVALID_BACKUP_PASSWORD')) setError(t('importPasswordInvalid'));
+      else if (message.includes('BACKUP_TOO_LARGE')) setError(t('backupTooLarge'));
+      else setError(t('importFailed'));
       setBusy(false);
     }
   };
   return <motion.div className="settings-backdrop backup-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onMouseDown={() => !busy && onClose()}>
     <motion.form className="settings-sheet import-sheet" role="dialog" aria-modal="true" aria-labelledby="import-title" initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:10,scale:.985}} transition={{duration:.2}} onMouseDown={event => event.stopPropagation()} onSubmit={submit}>
-      <div className="settings-heading"><div className="settings-symbol"><Upload size={19}/></div><div><span>Зашифрованная копия</span><h2 id="import-title">Импорт данных</h2></div><button type="button" onClick={onClose} disabled={busy} aria-label="Закрыть импорт"><X size={18}/></button></div>
-      <p>Укажите имя профиля и пароль, которым была создана копия. Затем выберите файл <strong>.encryptme-backup</strong>.</p>
-      <div className="import-warning"><ShieldCheck size={17}/><span>Импорт заменит оба текущих сейфа. Перед заменой EncryptMe автоматически сохранит локальную аварийную копию.</span></div>
-      <label>Имя профиля<input autoFocus value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" placeholder="Имя из резервной копии" /></label>
-      <label>Пароль резервной копии<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" placeholder="••••••••••••" /></label>
+      <div className="settings-heading"><div className="settings-symbol"><Upload size={19}/></div><div><span>{t('encryptedCopy')}</span><h2 id="import-title">{t('importData')}</h2></div><button type="button" onClick={onClose} disabled={busy} aria-label={t('closeImport')}><X size={18}/></button></div>
+      <p>{t('importInstructions')}</p>
+      <div className="import-warning"><ShieldCheck size={17}/><span>{t('importWarning')}</span></div>
+      <label>{t('profileName')}<input autoFocus value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" placeholder={t('backupProfileName')} /></label>
+      <label>{t('backupPassword')}<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" placeholder="••••••••••••" /></label>
       <AnimatePresence>{error && <motion.div className="form-error" initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0}}>{error}</motion.div>}</AnimatePresence>
-      <div className="button-row"><button className="ghost" type="button" onClick={onClose} disabled={busy}>Отмена</button><button className="primary" disabled={busy || username.trim().length < 2 || !password}>{busy ? 'Проверяем…' : 'Выбрать файл'} <Upload size={16}/></button></div>
+      <div className="button-row"><button className="ghost" type="button" onClick={onClose} disabled={busy}>{t('cancel')}</button><button className="primary" disabled={busy || username.trim().length < 2 || !password}>{busy ? t('checking') : t('chooseFile')} <Upload size={16}/></button></div>
     </motion.form>
   </motion.div>;
 }
 
 function Calendar({ month, selected, entries, onMonth, onDate }: { month: Date; selected: string; entries: DiaryEntry[]; onMonth(d: Date): void; onDate(s: string): void }) {
+  const { dateLocale, language } = useI18n();
   const days = eachDayOfInterval({ start: startOfWeek(startOfMonth(month), { weekStartsOn: 1 }), end: endOfWeek(endOfMonth(month), { weekStartsOn: 1 }) });
   const filled = new Set(entries.map(e => e.date));
-  return <div className="calendar"><div className="calendar-head"><strong>{format(month, 'LLLL yyyy', { locale: ru })}</strong><div><button onClick={() => onMonth(subMonths(month,1))}><ChevronLeft size={17}/></button><button onClick={() => onMonth(addMonths(month,1))}><ChevronRight size={17}/></button></div></div>
-    <div className="weekdays">{['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d => <span key={d}>{d}</span>)}</div>
+  return <div className="calendar"><div className="calendar-head"><strong>{format(month, 'LLLL yyyy', { locale: dateLocale })}</strong><div><button onClick={() => onMonth(subMonths(month,1))}><ChevronLeft size={17}/></button><button onClick={() => onMonth(addMonths(month,1))}><ChevronRight size={17}/></button></div></div>
+    <div className="weekdays">{(language === 'ru' ? ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'] : ['Mo','Tu','We','Th','Fr','Sa','Su']).map(d => <span key={d}>{d}</span>)}</div>
     <div className="days">{days.map(day => { const key = format(day, 'yyyy-MM-dd'); return <button key={key} className={`${!isSameMonth(day,month)?'muted ':''}${isSameDay(day,parseISO(selected))?'selected ':''}${isToday(day)?'today':''}`} onClick={() => { onDate(key); if (!isSameMonth(day,month)) onMonth(day); }}><span>{format(day,'d')}</span>{filled.has(key) && <i/>}</button>; })}</div>
   </div>;
 }
 
 function DateCarousel({ selected, entries, onDate }: { selected: string; entries: DiaryEntry[]; onDate(date: string): void }) {
+  const { t, dateLocale } = useI18n();
   const carouselRef = useRef<HTMLElement>(null);
   const selectedDay = parseISO(selected);
   const dates = Array.from({ length: 9 }, (_, index) => addDays(selectedDay, index - 4));
   const filled = new Set(entries.map(entry => entry.date));
   useEffect(() => { carouselRef.current?.querySelector('[aria-current="date"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' }); }, [selected]);
-  return <nav ref={carouselRef} className="date-carousel" aria-label="Выбор даты">
+  return <nav ref={carouselRef} className="date-carousel" aria-label={t('chooseDate')}>
     <AnimatePresence initial={false} mode="popLayout">{dates.map(day => {
       const key = format(day, 'yyyy-MM-dd');
       return <motion.button layout key={key} data-haptic="selection" className={key === selected ? 'selected' : ''} initial={{ opacity: 0, scale: .86 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: .86 }} whileTap={{ scale: .9 }} transition={{ type: 'spring', stiffness: 430, damping: 30 }} onClick={() => onDate(key)} aria-current={key === selected ? 'date' : undefined}>
-        <span>{format(day, 'EEEEE', { locale: ru })}</span><strong>{format(day, 'd')}</strong>{filled.has(key) && <i/>}
+        <span>{format(day, 'EEEEE', { locale: dateLocale })}</span><strong>{format(day, 'd')}</strong>{filled.has(key) && <i/>}
       </motion.button>;
     })}</AnimatePresence>
   </nav>;
 }
 
 function MobileDayEntries({ entries, activeId, onPick, onCreate }: { entries: DiaryEntry[]; activeId: string | null; onPick(id: string): void; onCreate(): void }) {
-  return <section className="mobile-day-entries" aria-label="Записи выбранного дня">
-    <div className="mobile-day-label"><span>Записи дня</span><b>{entries.length}</b></div>
+  const { t } = useI18n();
+  return <section className="mobile-day-entries" aria-label={t('selectedDayEntries')}>
+    <div className="mobile-day-label"><span>{t('dayEntries')}</span><b>{entries.length}</b></div>
     <div className="mobile-entry-chips">
-      {entries.map(entry => <motion.button layout key={entry.id} data-haptic="selection" className={entry.id === activeId ? 'active' : ''} whileTap={{ scale: .94 }} transition={{ type: 'spring', stiffness: 440, damping: 30 }} onClick={() => onPick(entry.id)}>{entry.title || 'Без названия'}</motion.button>)}
-      <motion.button className="mobile-add-entry" whileTap={{ scale: .94 }} onClick={onCreate}><Plus size={14}/> Добавить</motion.button>
+      {entries.map(entry => <motion.button layout key={entry.id} data-haptic="selection" className={entry.id === activeId ? 'active' : ''} whileTap={{ scale: .94 }} transition={{ type: 'spring', stiffness: 440, damping: 30 }} onClick={() => onPick(entry.id)}>{entry.title || t('untitled')}</motion.button>)}
+      <motion.button className="mobile-add-entry" whileTap={{ scale: .94 }} onClick={onCreate}><Plus size={14}/> {t('add')}</motion.button>
     </div>
   </section>;
 }
 
 function EntryRow({ entry, active, onClick }: { entry: DiaryEntry; active: boolean; onClick(): void }) {
+  const { t } = useI18n();
   const mood = moods.find(m => m.id === entry.mood)!;
-  return <button className={`entry-row ${active ? 'active' : ''}`} onClick={onClick}><i style={{background:mood.dot}}/><div><strong>{entry.title || 'Без названия'}</strong><span>{plainText(entry.content).slice(0, 62) || 'Пустая запись'}</span></div><time>{format(parseISO(entry.updatedAt), 'HH:mm')}</time></button>;
+  return <button className={`entry-row ${active ? 'active' : ''}`} onClick={onClick}><i style={{background:mood.dot}}/><div><strong>{entry.title || t('untitled')}</strong><span>{plainText(entry.content).slice(0, 62) || t('emptyEntry')}</span></div><time>{format(parseISO(entry.updatedAt), 'HH:mm')}</time></button>;
 }
 
 function SearchResults({ entries, onPick }: { entries: DiaryEntry[]; onPick(e: DiaryEntry): void }) {
-  return <div className="results"><div className="sidebar-section-title"><span>Результаты</span><span>{entries.length}</span></div>{entries.map(e => <button key={e.id} onClick={() => onPick(e)}><strong>{e.title || 'Без названия'}</strong><span>{format(parseISO(e.date),'d MMM yyyy',{locale:ru})} · {plainText(e.content).slice(0,55)}</span></button>)}{!entries.length && <div className="empty-day">Ничего не найдено.</div>}</div>;
+  const { t, dateLocale } = useI18n();
+  return <div className="results"><div className="sidebar-section-title"><span>{t('results')}</span><span>{entries.length}</span></div>{entries.map(e => <button key={e.id} onClick={() => onPick(e)}><strong>{e.title || t('untitled')}</strong><span>{format(parseISO(e.date),'d MMM yyyy',{locale:dateLocale})} · {plainText(e.content).slice(0,55)}</span></button>)}{!entries.length && <div className="empty-day">{t('nothingFound')}</div>}</div>;
 }
 
 function SaveIndicator({ state }: { state: SaveState }) {
-  const text = state === 'error' ? 'Ошибка' : 'Сохранено';
+  const { t } = useI18n();
+  const text = state === 'error' ? t('saveError') : t('saved');
   return <div className={`save-state ${state}`}><Save aria-hidden="true"/>{text}</div>;
 }
 
 function EmptyEditor({ date, onCreate }: { date: string; onCreate(): void }) {
-  return <motion.div className="empty-editor" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}><div className="empty-orbit"><BookOpen size={28}/></div><span>{format(parseISO(date),'EEEE, d MMMM',{locale:ru})}</span><h2>У этого дня ещё нет истории.</h2><p>Начните с одной мысли — остальное придёт само.</p><button className="primary" onClick={onCreate}><Plus size={17}/> Создать запись</button></motion.div>;
+  const { t, dateLocale } = useI18n();
+  return <motion.div className="empty-editor" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}><div className="empty-orbit"><BookOpen size={28}/></div><span>{format(parseISO(date),'EEEE, d MMMM',{locale:dateLocale})}</span><h2>{t('emptyDateTitle')}</h2><p>{t('emptyDateLead')}</p><button className="primary" onClick={onCreate}><Plus size={17}/> {t('createEntry')}</button></motion.div>;
 }
 
 function EntryLoading() {
-  return <motion.div className="entry-loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><span className="loader"/><p>Расшифровываем запись…</p></motion.div>;
+  const { t } = useI18n();
+  return <motion.div className="entry-loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><span className="loader"/><p>{t('decryptingEntry')}</p></motion.div>;
 }
 
 function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: Partial<DiaryEntry>): void; onDelete(): void }) {
+  const { t, language, wordUnit } = useI18n();
   const initialContent = entry.content || '<p><br></p>';
   const editorRef = useRef<HTMLDivElement>(null); const [moodOpen, setMoodOpen] = useState(false); const contentRef = useRef(initialContent);
   const [formats, setFormats] = useState({ bold: false, italic: false, underline: false, strike: false, unordered: false, ordered: false, quote: false, spoiler: false });
@@ -580,20 +697,20 @@ function Editor({ entry, onUpdate, onDelete }: { entry: DiaryEntry; onUpdate(p: 
     }
     commit(); refreshFormats();
   };
-  const wordCount = countWords(entry.content);
+  const wordCount = countWords(entry.content, language);
   return <motion.article className="editor" initial={{opacity:0, y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-5}} transition={{duration:.22}}>
-    <div className="editor-meta"><button className="mood-button" onClick={() => setMoodOpen(!moodOpen)}><i style={{background:moods.find(m=>m.id===entry.mood)?.dot}}/>{moods.find(m=>m.id===entry.mood)?.label}<ChevronRight size={14}/></button>
-      <AnimatePresence>{moodOpen && <motion.div className="mood-menu" initial={{opacity:0,y:-5}} animate={{opacity:1,y:0}} exit={{opacity:0}}>{moods.map(m => <button key={m.id} onClick={() => {onUpdate({mood:m.id});setMoodOpen(false)}}><i style={{background:m.dot}}/>{m.label}</button>)}</motion.div>}</AnimatePresence>
-      <span><Clock3 size={14}/> Изменено {format(parseISO(entry.updatedAt),'HH:mm')}</span></div>
-    <input className="title-input" value={entry.title} onChange={e => onUpdate({title:e.target.value.slice(0,140)})} placeholder="Название записи" />
-    <div className="toolbar" role="toolbar" aria-label="Форматирование">
-      <Tool icon={<Undo2/>} label="Отменить" onClick={() => travelHistory(-1)}/><Tool icon={<Redo2/>} label="Повторить" onClick={() => travelHistory(1)}/><span className="tool-sep"/>
-      <Tool icon={<Bold/>} label="Жирный" pressed={formats.bold} onClick={() => command('bold')}/><Tool icon={<Italic/>} label="Курсив" pressed={formats.italic} onClick={() => command('italic')}/><Tool icon={<Underline/>} label="Подчёркнутый" pressed={formats.underline} onClick={() => command('underline')}/><Tool icon={<Strikethrough/>} label="Зачёркнутый" pressed={formats.strike} onClick={() => command('strikeThrough')}/><span className="tool-sep"/>
-      <Tool icon={<List/>} label="Список" pressed={formats.unordered} onClick={() => command('insertUnorderedList')}/><Tool icon={<ListOrdered/>} label="Нумерованный список" pressed={formats.ordered} onClick={() => command('insertOrderedList')}/><Tool icon={<Quote/>} label="Цитата" pressed={formats.quote} onClick={toggleQuote}/><span className="tool-sep"/>
-      <Tool icon={<EyeOff/>} label="Скрыть выделенное" pressed={formats.spoiler} onClick={toggleSpoiler}/>
+    <div className="editor-meta"><button className="mood-button" onClick={() => setMoodOpen(!moodOpen)}><i style={{background:moods.find(m=>m.id===entry.mood)?.dot}}/>{t(moods.find(m=>m.id===entry.mood)?.label || 'noMood')}<ChevronRight size={14}/></button>
+      <AnimatePresence>{moodOpen && <motion.div className="mood-menu" initial={{opacity:0,y:-5}} animate={{opacity:1,y:0}} exit={{opacity:0}}>{moods.map(m => <button key={m.id} onClick={() => {onUpdate({mood:m.id});setMoodOpen(false)}}><i style={{background:m.dot}}/>{t(m.label)}</button>)}</motion.div>}</AnimatePresence>
+      <span><Clock3 size={14}/> {t('modifiedAt', { time: format(parseISO(entry.updatedAt),'HH:mm') })}</span></div>
+    <input className="title-input" value={entry.title} onChange={e => onUpdate({title:e.target.value.slice(0,140)})} placeholder={t('entryTitle')} />
+    <div className="toolbar" role="toolbar" aria-label={t('formatting')}>
+      <Tool icon={<Undo2/>} label={t('undo')} onClick={() => travelHistory(-1)}/><Tool icon={<Redo2/>} label={t('redo')} onClick={() => travelHistory(1)}/><span className="tool-sep"/>
+      <Tool icon={<Bold/>} label={t('bold')} pressed={formats.bold} onClick={() => command('bold')}/><Tool icon={<Italic/>} label={t('italic')} pressed={formats.italic} onClick={() => command('italic')}/><Tool icon={<Underline/>} label={t('underline')} pressed={formats.underline} onClick={() => command('underline')}/><Tool icon={<Strikethrough/>} label={t('strike')} pressed={formats.strike} onClick={() => command('strikeThrough')}/><span className="tool-sep"/>
+      <Tool icon={<List/>} label={t('bulletList')} pressed={formats.unordered} onClick={() => command('insertUnorderedList')}/><Tool icon={<ListOrdered/>} label={t('numberedList')} pressed={formats.ordered} onClick={() => command('insertOrderedList')}/><Tool icon={<Quote/>} label={t('quote')} pressed={formats.quote} onClick={toggleQuote}/><span className="tool-sep"/>
+      <Tool icon={<EyeOff/>} label={t('spoiler')} pressed={formats.spoiler} onClick={toggleSpoiler}/>
     </div>
-    <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder="Что хочется сохранить об этом дне?" onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 1 : -1); } }} onKeyUp={refreshFormats} onMouseUp={refreshFormats} onFocus={refreshFormats} onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={commit} />
-    <footer className="editor-footer"><span>{wordCount} {wordCount === 1 ? 'слово' : wordCount > 1 && wordCount < 5 ? 'слова' : 'слов'}</span><span>{plainText(entry.content).length} знаков</span><button data-haptic="warning" className="delete-entry" onClick={onDelete} title="Удалить запись" aria-label="Удалить запись"><Trash2 size={18}/><span>Удалить запись</span></button></footer>
+    <div ref={editorRef} className="content-editor" contentEditable suppressContentEditableWarning data-placeholder={t('editorPlaceholder')} onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 1 : -1); } }} onKeyUp={refreshFormats} onMouseUp={refreshFormats} onFocus={refreshFormats} onClick={e => { const spoiler = (e.target as HTMLElement).closest<HTMLElement>('[data-spoiler="true"]'); if (spoiler && e.currentTarget.contains(spoiler)) spoiler.classList.toggle('revealed'); }} onInput={commit} />
+    <footer className="editor-footer"><span>{t('words', { count: wordCount, unit: wordUnit(wordCount) })}</span><span>{t('characters', { count: plainText(entry.content).length })}</span><button data-haptic="warning" className="delete-entry" onClick={onDelete} title={t('deleteEntry')} aria-label={t('deleteEntry')}><Trash2 size={18}/><span>{t('deleteEntry')}</span></button></footer>
   </motion.article>;
 }
 

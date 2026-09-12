@@ -10,7 +10,7 @@ export function normalizeWifiSyncQrScanError(reason: unknown) {
   return /cancel/i.test(message) ? new Error('QR_SCAN_CANCELLED') : reason instanceof Error ? reason : new Error(message);
 }
 
-export async function scanWifiSyncQr(): Promise<WifiSyncQrConnection> {
+export async function scanWifiSyncQr(locale: 'ru' | 'en' = 'en'): Promise<WifiSyncQrConnection> {
   const {
     CapacitorBarcodeScanner,
     CapacitorBarcodeScannerCameraDirection,
@@ -22,11 +22,11 @@ export async function scanWifiSyncQr(): Promise<WifiSyncQrConnection> {
       hint: CapacitorBarcodeScannerTypeHint.QR_CODE,
       cameraDirection: CapacitorBarcodeScannerCameraDirection.BACK,
       scanOrientation: CapacitorBarcodeScannerScanOrientation.ADAPTIVE,
-      scanInstructions: 'Наведите камеру на QR-код в EncryptMe на компьютере',
+      scanInstructions: locale === 'ru' ? 'Наведите камеру на QR-код в EncryptMe на компьютере' : 'Point the camera at the EncryptMe QR code on your computer',
       scanButton: false,
-      cancelButtonAccessibilityLabel: 'Отменить сканирование',
-      torchButtonOnAccessibilityLabel: 'Выключить фонарик',
-      torchButtonOffAccessibilityLabel: 'Включить фонарик'
+      cancelButtonAccessibilityLabel: locale === 'ru' ? 'Отменить сканирование' : 'Cancel scanning',
+      torchButtonOnAccessibilityLabel: locale === 'ru' ? 'Выключить фонарик' : 'Turn flashlight off',
+      torchButtonOffAccessibilityLabel: locale === 'ru' ? 'Включить фонарик' : 'Turn flashlight on'
     });
     return parseWifiSyncQrScanResult(result);
   } catch (reason) {

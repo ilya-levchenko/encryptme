@@ -11,6 +11,9 @@ build/icon.ico
 *.p12
 *.mobileprovision
 *.cer
+*.jks
+*.keystore
+native/bluetooth-sync/android/build/
 AuthKey_*.p8
 *.log
 *.tsbuildinfo
