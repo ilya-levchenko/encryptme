@@ -80,6 +80,7 @@ describe('desktop reminder service', () => {
     expect(main).toContain("ipcMain.handle('reminders:get'");
     expect(main).toContain("ipcMain.handle('reminders:set'");
     expect(main).toContain("ipcMain.handle('reminders:foreground'");
+    expect(main).toContain("if (!mainWindow?.isVisible()) return reminderService.getSettings()");
     expect(preload).toContain("getReminderSettings: () => ipcRenderer.invoke('reminders:get')");
     expect(preload).toContain("ipcRenderer.on('app:reminder-action'");
   });

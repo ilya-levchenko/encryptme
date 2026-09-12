@@ -126,7 +126,12 @@ export function createMobileReminderController({ notifications, storage, platfor
     let currentPermission = await permission();
     if ((input.journalEnabled || input.donationEnabled) && currentPermission !== 'granted') {
       currentPermission = permissionOf((await notifications.requestPermissions()).display);
-      if (currentPermission !== 'granted') return { ...previous, journalEnabled: false, donationEnabled: false, permission: currentPermission };
+      if (currentPermission !== 'granted') {
+        const deniedSettings = { ...previous, journalEnabled: false, donationEnabled: false, donationNextAt: null, locale: input.locale };
+        await cancel(...OWNED_IDS).catch(() => undefined);
+        write(deniedSettings);
+        return { ...deniedSettings, permission: currentPermission };
+      }
     }
     const currentNow = now();
     const settings: ReminderSettings = {

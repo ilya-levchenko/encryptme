@@ -391,7 +391,10 @@ ipcMain.handle('app:open-external', async (_event, value) => { await shell.openE
 ipcMain.handle('app:set-language', async (_event, locale) => { uiLocale = locale === 'ru' ? 'ru' : 'en'; updateTrayLanguage(); return { ok: true }; });
 ipcMain.handle('reminders:get', async () => reminderService.getSettings());
 ipcMain.handle('reminders:set', async (_event, input) => reminderService.setSettings(input));
-ipcMain.handle('reminders:foreground', async (_event, input) => reminderService.markForeground(input));
+ipcMain.handle('reminders:foreground', async (_event, input) => {
+  if (!mainWindow?.isVisible()) return reminderService.getSettings();
+  return reminderService.markForeground(input);
+});
 
 ipcMain.handle('app:complete-window-action', async (_event, action) => {
   if (action !== 'hide' && action !== 'quit') throw new Error('INVALID_WINDOW_ACTION');

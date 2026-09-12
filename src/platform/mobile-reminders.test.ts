@@ -23,7 +23,7 @@ function setup(permission: 'prompt' | 'granted' | 'denied' = 'granted') {
     now: () => new Date('2026-09-12T10:00:00Z'),
     random: () => 0
   });
-  return { controller, notifications, scheduled, canceled, fire: (route: string) => actionListener?.({ notification: { extra: { route } } }) };
+  return { controller, notifications, scheduled, canceled, values, fire: (route: string) => actionListener?.({ notification: { extra: { route } } }) };
 }
 
 describe('mobile reminder controller', () => {
@@ -37,6 +37,12 @@ describe('mobile reminder controller', () => {
     const { controller, scheduled } = setup('denied');
     expect(await controller.setSettings({ journalEnabled: true, donationEnabled: false, locale: 'en', content: reminderContent('en') })).toMatchObject({ journalEnabled: false, donationEnabled: false, permission: 'denied' });
     expect(scheduled).toHaveLength(0);
+  });
+
+  test('permission denial persists disabled switches and the requested locale', async () => {
+    const { controller, values } = setup('denied');
+    await controller.setSettings({ journalEnabled: true, donationEnabled: true, locale: 'ru', content: reminderContent('ru') });
+    expect(JSON.parse(values.get('encryptme:reminders') || '{}')).toMatchObject({ journalEnabled: false, donationEnabled: false, donationNextAt: null, locale: 'ru' });
   });
 
   test('enables inexact journal and monthly donation schedules', async () => {

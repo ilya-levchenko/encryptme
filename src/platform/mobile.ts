@@ -432,7 +432,7 @@ export function createMobileBridge(): Window['encryptMe'] {
     async setLanguage() { return { ok: true }; },
 
     async getReminderSettings() {
-      if (!reminderController) return { ...defaultReminderSettings(new Date(), nativePlatform === 'web' ? 'en' : 'en'), permission: 'unsupported' };
+      if (!reminderController) return { ...defaultReminderSettings(new Date(), 'en'), permission: 'unsupported' };
       return reminderController.getSettings();
     },
     async setReminderSettings(input) {
