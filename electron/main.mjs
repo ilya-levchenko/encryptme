@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, shell, Tray } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, cp, mkdir, stat } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { networkInterfaces } from 'node:os';
 import { blankVault, createSplitVault, decryptVault, deriveVaultKey, FAST_KDF, isSplitVault, loadSplitEntry, openSplitVault, openSplitVaultWithKey, readJson, rekeySplitVault, safeCompareHex, SCRYPT_KDF, updateSplitVault, usernameDigest, writeAtomic } from './vault.mjs';
 import { createEncryptedBackup, openEncryptedBackup, writeEncryptedBackupFile } from './backup.mjs';
 import { createWifiSyncResponse, mergeSplitVaults } from './wifi-sync.mjs';
+import { createReminderService } from './reminders.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devUrl = process.env.VITE_DEV_SERVER_URL || (app.isPackaged ? null : 'http://localhost:5173');
@@ -20,7 +21,9 @@ let pendingWindowAction = null;
 let windowActionTimer = null;
 let trayHintShown = false;
 let wifiSync = null;
+let reminderService = null;
 let uiLocale = 'en';
+const startHidden = process.argv.includes('--hidden');
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const WIFI_SYNC_TTL_MS = 5 * 60 * 1000;
 const allowedExternalUrl = value => {
@@ -47,6 +50,7 @@ const legacyStoreDirs = () => {
 };
 const configFile = () => path.join(storeDir(), 'profile.json');
 const vaultFile = (slot, ext = 'encryptme') => path.join(storeDir(), `vault-${slot}.${ext}`);
+const remindersFile = () => path.join(app.getPath('userData'), 'reminders.json');
 const readVault = async (slot) => {
   const candidates = ['encryptme', 'endiar'];
   for (const ext of candidates) {
@@ -223,9 +227,10 @@ async function migrateLegacyStoreDir() {
   await mkdir(currentDir, { recursive: true });
 }
 
-async function createWindow() {
+async function createWindow({ show = true } = {}) {
   mainWindow = new BrowserWindow({
     width: 1440, height: 920, minWidth: 980, minHeight: 680,
+    show,
     backgroundColor: '#08111f', titleBarStyle: 'hiddenInset', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
   });
@@ -240,6 +245,36 @@ async function createWindow() {
     return { action: 'deny' };
   });
   if (devUrl) await mainWindow.loadURL(devUrl); else await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+}
+
+function sendReminderAction(route) {
+  const deliver = () => mainWindow?.webContents.send('app:reminder-action', route);
+  if (!mainWindow || mainWindow.isDestroyed()) { void createWindow().then(deliver); return; }
+  showWindow();
+  if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', deliver);
+  else deliver();
+}
+
+function createDesktopReminderService() {
+  const activeNotifications = new Set();
+  const service = createReminderService({
+    readState: async () => readJson(remindersFile()),
+    writeState: async state => writeAtomic(remindersFile(), state),
+    isSupported: () => Notification.isSupported(),
+    setLoginStartup: enabled => {
+      if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: enabled, args: enabled ? ['--hidden'] : [] });
+    },
+    notify: ({ title, body, route, onClick }) => {
+      const notification = new Notification({ title, body, id: `encryptme-${route}`, groupId: 'encryptme-reminders' });
+      activeNotifications.add(notification);
+      notification.once('click', () => { activeNotifications.delete(notification); showWindow(); onClick(); });
+      notification.once('close', () => activeNotifications.delete(notification));
+      notification.once('failed', () => activeNotifications.delete(notification));
+      notification.show();
+    }
+  });
+  service.onAction(sendReminderAction);
+  return service;
 }
 
 ipcMain.handle('vault:status', async () => ({ initialized: await exists(configFile()) }));
@@ -354,6 +389,9 @@ ipcMain.handle('wifi-sync:stop', async () => { stopWifiSync(); return { ok: true
 ipcMain.handle('app:copy-text', async (_event, value) => { clipboard.writeText(String(value || '')); return { ok: true }; });
 ipcMain.handle('app:open-external', async (_event, value) => { await shell.openExternal(allowedExternalUrl(value)); return { ok: true }; });
 ipcMain.handle('app:set-language', async (_event, locale) => { uiLocale = locale === 'ru' ? 'ru' : 'en'; updateTrayLanguage(); return { ok: true }; });
+ipcMain.handle('reminders:get', async () => reminderService.getSettings());
+ipcMain.handle('reminders:set', async (_event, input) => reminderService.setSettings(input));
+ipcMain.handle('reminders:foreground', async (_event, input) => reminderService.markForeground(input));
 
 ipcMain.handle('app:complete-window-action', async (_event, action) => {
   if (action !== 'hide' && action !== 'quit') throw new Error('INVALID_WINDOW_ACTION');
@@ -428,11 +466,15 @@ ipcMain.handle('vault:import', async (_event, input) => {
 });
 
 app.whenReady().then(async () => {
+  app.setAppUserModelId('com.encryptme.diary');
   uiLocale = app.getLocale().toLowerCase().startsWith('ru') ? 'ru' : 'en';
   await migrateLegacyStoreDir();
-  await createWindow();
+  reminderService = createDesktopReminderService();
+  await reminderService.start();
+  await createWindow({ show: !startHidden });
   createTray();
+  powerMonitor.on('resume', () => { void reminderService?.start(); });
 });
-app.on('before-quit', () => { isQuitting = true; if (windowActionTimer) clearTimeout(windowActionTimer); clearSession(); });
+app.on('before-quit', () => { isQuitting = true; if (windowActionTimer) clearTimeout(windowActionTimer); reminderService?.stop(); clearSession(); });
 app.on('window-all-closed', () => { clearSession(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); else showWindow(); });

@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('encryptMe', {
   platform: 'desktop',
-  capabilities: { wifiHost: true, wifiClient: false, qrScanner: false, bluetoothSync: false },
+  capabilities: { wifiHost: true, wifiClient: false, qrScanner: false, bluetoothSync: false, localNotifications: true },
   status: () => ipcRenderer.invoke('vault:status'),
   initialize: (input) => ipcRenderer.invoke('vault:initialize', input),
   unlock: (input) => ipcRenderer.invoke('vault:unlock', input),
@@ -29,6 +29,14 @@ contextBridge.exposeInMainWorld('encryptMe', {
   copyText: (text) => ipcRenderer.invoke('app:copy-text', text),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   setLanguage: (locale) => ipcRenderer.invoke('app:set-language', locale),
+  getReminderSettings: () => ipcRenderer.invoke('reminders:get'),
+  setReminderSettings: (input) => ipcRenderer.invoke('reminders:set', input),
+  markAppForeground: (input) => ipcRenderer.invoke('reminders:foreground', input),
+  onReminderAction: (callback) => {
+    const listener = (_event, route) => callback(route);
+    ipcRenderer.on('app:reminder-action', listener);
+    return () => ipcRenderer.removeListener('app:reminder-action', listener);
+  },
   onWindowAction: (callback) => {
     const listener = (_event, action) => callback(action);
     ipcRenderer.on('app:lock-before-window-action', listener);
