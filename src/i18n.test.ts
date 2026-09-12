@@ -51,6 +51,13 @@ describe('interface localization', () => {
     expect(DONATION_ADDRESS).toMatch(/^T[1-9A-HJ-NP-Za-km-z]{33}$/);
   });
 
+  it('explains that reminders are local and donation prompts are optional', () => {
+    expect(translate('en', 'notificationsDescription')).toContain('only on this device');
+    expect(translate('ru', 'notificationsDescription')).toContain('только на этом устройстве');
+    expect(translate('en', 'donationReminderDescription')).toContain('optional');
+    expect(translate('ru', 'donationReminderDescription')).toContain('добровольной');
+  });
+
   it('uses correct English and Russian word forms', () => {
     expect([1, 2, 5, 11, 21].map(count => localizedWordUnit('ru', count))).toEqual(['слово', 'слова', 'слов', 'слов', 'слово']);
     expect([1, 2].map(count => localizedWordUnit('en', count))).toEqual(['word', 'words']);
