@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Bluetooth, Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, ExternalLink, Info, Italic,
+  BellRing, Bluetooth, Bold, BookOpen, CalendarDays, ChevronLeft, ChevronRight, Clock3, Copy, ExternalLink, Info, Italic,
   Download, Languages, List, ListOrdered, LockKeyhole, LogOut, Menu, MoonStar, Plus, Quote,
   Redo2, RefreshCw, Save, ScanQrCode, Search, Settings2, ShieldCheck, Sparkles, Strikethrough, Trash2, Underline, Undo2, Upload, Wifi, X, EyeOff
 } from 'lucide-react';
@@ -14,6 +14,8 @@ import { formatWifiSyncCode, isCompleteWifiSyncCode, wifiSyncCodeDigits } from '
 import { createWifiSyncQrPayload } from './wifi-sync-qr';
 import { createWifiSyncQrDataUrl } from './wifi-sync-qr-image';
 import { APP_VERSION, AUTHOR_EMAIL, DONATION_ADDRESS, DONATION_URL, LICENSE_URL, SOURCE_URL, useI18n, type Language, type TranslationKey } from './i18n';
+import { reminderContent } from './reminders';
+import { reminderSettingsView } from './reminder-settings';
 
 type Screen = 'loading' | 'setup' | 'login' | 'diary';
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -62,12 +64,20 @@ export function App() {
   const [lockReason, setLockReason] = useState<LockReason>(null);
   const [lastAutoLockMs, setLastAutoLockMs] = useState(IDLE_TIMEOUT_MS);
   const [importOpen, setImportOpen] = useState(false);
+  const [reminderRoute, setReminderRoute] = useState<ReminderRoute | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
   const latestData = useRef(data);
   const locking = useRef(false);
 
   useEffect(() => { window.encryptMe.status().then(s => setScreen(s.initialized ? 'login' : 'setup')).catch(() => setScreen('setup')); }, []);
   useEffect(() => { latestData.current = data; }, [data]);
+  useEffect(() => window.encryptMe.onReminderAction(route => { if (route === 'donation') setReminderRoute(route); }), []);
+  useEffect(() => {
+    const markForeground = () => { if (!document.hidden) void window.encryptMe.markAppForeground({ locale: language, content: reminderContent(language) }).catch(() => undefined); };
+    markForeground();
+    document.addEventListener('visibilitychange', markForeground);
+    return () => document.removeEventListener('visibilitychange', markForeground);
+  }, [language]);
 
   useEffect(() => {
     if (screen !== 'diary' || !sessionId || !activeId) return;
@@ -191,7 +201,8 @@ export function App() {
     onStartBluetoothSync={async () => { await flushForSync(); return window.encryptMe.startBluetoothSync({ sessionId }); }}
     onScanBluetoothPeers={() => window.encryptMe.scanBluetoothPeers()}
     onConnectBluetoothSync={async deviceId => { await flushForSync(); const result = await window.encryptMe.connectBluetoothSync({ sessionId, deviceId }); applySyncedData(result.data); return result; }}
-    onStopBluetoothSync={() => window.encryptMe.stopBluetoothSync()} />{importDialog}</>;
+    onStopBluetoothSync={() => window.encryptMe.stopBluetoothSync()}
+    reminderRoute={reminderRoute} onReminderRouteHandled={() => setReminderRoute(null)} />{importDialog}</>;
 }
 
 function Brand() { return <div className="brand"><span className="brand-mark"><MoonStar size={17} /></span><span>EncryptMe</span></div>; }
@@ -286,9 +297,11 @@ type DiaryProps = {
   onScanBluetoothPeers(): Promise<{ peers: BluetoothPeer[] }>;
   onConnectBluetoothSync(deviceId: string): Promise<{ data: VaultData; stats: WifiSyncStats }>;
   onStopBluetoothSync(): Promise<{ ok: boolean }>;
+  reminderRoute: ReminderRoute | null;
+  onReminderRouteHandled(): void;
 };
 
-function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onScanWifiSyncQr, onConnectWifiSync, onStartBluetoothSync, onScanBluetoothPeers, onConnectBluetoothSync, onStopBluetoothSync }: DiaryProps) {
+function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onChange, onLock, onExport, onImport, onSwitchAccount, onStartWifiSync, onStopWifiSync, onScanWifiSyncQr, onConnectWifiSync, onStartBluetoothSync, onScanBluetoothPeers, onConnectBluetoothSync, onStopBluetoothSync, reminderRoute, onReminderRouteHandled }: DiaryProps) {
   const { t, language, preference, setPreference, dateLocale, autoLockLabel } = useI18n();
   const [month, setMonth] = useState(parseISO(selectedDate)); const [search, setSearch] = useState(''); const [mobileNav, setMobileNav] = useState(false); const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupState, setBackupState] = useState<'idle' | 'exporting' | 'done' | 'fallback' | 'error'>('idle');
@@ -301,6 +314,26 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
   const [bluetoothMessage, setBluetoothMessage] = useState('');
   const [bluetoothPercent, setBluetoothPercent] = useState(0);
   const [donationCopied, setDonationCopied] = useState(false);
+  const [reminderSettings, setReminderSettings] = useState<ReminderSettingsResult | null>(null);
+  const [reminderMessage, setReminderMessage] = useState<'denied' | 'unsupported' | 'error' | null>(null);
+  const [reminderBusy, setReminderBusy] = useState(false);
+  const donationRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { void window.encryptMe.getReminderSettings().then(setReminderSettings).catch(() => setReminderMessage('error')); }, []);
+  useEffect(() => {
+    if (reminderRoute !== 'donation') return;
+    setSettingsOpen(true);
+    onReminderRouteHandled();
+    window.setTimeout(() => donationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 240);
+  }, [reminderRoute, onReminderRouteHandled]);
+  useEffect(() => {
+    if (!reminderSettings || reminderSettings.locale === language) return;
+    void window.encryptMe.setReminderSettings({
+      journalEnabled: reminderSettings.journalEnabled,
+      donationEnabled: reminderSettings.donationEnabled,
+      locale: language,
+      content: reminderContent(language)
+    }).then(setReminderSettings).catch(() => setReminderMessage('error'));
+  }, [language, reminderSettings]);
   useEffect(() => window.encryptMe.onWifiSyncUpdated(update => {
     const changed = update.stats.received + update.stats.sent + update.stats.deleted;
     setWifiHost(null); setWifiState('done');
@@ -431,6 +464,24 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
     setDonationCopied(true);
     window.setTimeout(() => setDonationCopied(false), 1800);
   };
+  const toggleReminder = async (kind: 'journal' | 'donation') => {
+    if (reminderBusy) return;
+    const current = reminderSettings || await window.encryptMe.getReminderSettings();
+    setReminderBusy(true); setReminderMessage(null);
+    try {
+      const result = await window.encryptMe.setReminderSettings({
+        journalEnabled: kind === 'journal' ? !current.journalEnabled : current.journalEnabled,
+        donationEnabled: kind === 'donation' ? !current.donationEnabled : current.donationEnabled,
+        locale: language,
+        content: reminderContent(language)
+      });
+      setReminderSettings(result);
+      const view = reminderSettingsView(result);
+      setReminderMessage(view.message);
+    } catch { setReminderMessage('error'); }
+    finally { setReminderBusy(false); }
+  };
+  const reminderView = reminderSettings ? reminderSettingsView(reminderSettings) : { journalEnabled: false, donationEnabled: false, disabled: false, message: null };
   return <main className="app-shell">
     <header className="mobile-header"><div className="mobile-header-actions"><button onClick={() => setMobileNav(true)} aria-label={t('menu')}><Menu /></button><button onClick={() => setSettingsOpen(true)} aria-label={t('settings')}><Settings2 /></button></div><Brand /><SaveIndicator state={saveState} /></header>
     <AnimatePresence>{mobileNav && <motion.div className="mobile-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onClick={() => setMobileNav(false)} />}</AnimatePresence>
@@ -464,6 +515,18 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
         <div className="settings-subheading"><span>{t('autoLock')}</span><p>{t('autoLockDescription')}</p></div>
         <div className="lock-options" role="radiogroup" aria-label={t('autoLockGroup')}>{AUTO_LOCK_OPTIONS.map(option => <button key={option.value} role="radio" aria-checked={autoLockMs === option.value} className={autoLockMs === option.value ? 'selected' : ''} onClick={() => updateAutoLock(option.value)}><span>{autoLockLabel(option.value)}</span><i/></button>)}</div>
         <div className="settings-note"><ShieldCheck size={15}/><span>{t('settingEncrypted')}</span></div>
+        <div className="settings-divider" />
+        <div className="settings-section-title"><BellRing size={15}/><span>{t('notifications')}</span></div>
+        <p className="settings-section-copy">{t('notificationsDescription')}</p>
+        <div className="reminder-options">
+          <button type="button" role="switch" aria-checked={reminderView.journalEnabled} disabled={reminderBusy || reminderView.disabled} data-haptic="selection" onClick={() => void toggleReminder('journal')}>
+            <span><strong>{t('journalReminder')}</strong><small>{t('journalReminderDescription')}</small></span><i className={reminderView.journalEnabled ? 'on' : ''}><b/></i>
+          </button>
+          <button type="button" role="switch" aria-checked={reminderView.donationEnabled} disabled={reminderBusy || reminderView.disabled} data-haptic="selection" onClick={() => void toggleReminder('donation')}>
+            <span><strong>{t('donationReminder')}</strong><small>{t('donationReminderDescription')}</small></span><i className={reminderView.donationEnabled ? 'on' : ''}><b/></i>
+          </button>
+        </div>
+        {(reminderMessage || reminderView.message) && <div className="backup-message warning">{(reminderMessage || reminderView.message) === 'denied' ? t('notificationPermissionDenied') : (reminderMessage || reminderView.message) === 'unsupported' ? t('notificationsUnsupported') : t('notificationScheduleError')}</div>}
         <div className="settings-divider" />
         <div className="settings-subheading"><span>{t('backup')}</span><p>{t('backupDescription')}</p></div>
         <div className="backup-actions">
@@ -512,7 +575,7 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
           <div className="about-product"><Brand/><small>{t('version', { version: APP_VERSION })}</small></div>
           <dl><div><dt>{t('developedBy')}</dt><dd>Ilya Levchenko</dd></div><div><dt>{t('contact')}</dt><dd><button onClick={() => window.encryptMe.openExternal(`mailto:${AUTHOR_EMAIL}`)}>{AUTHOR_EMAIL}<ExternalLink size={13}/></button></dd></div></dl>
           <div className="about-links"><button onClick={() => window.encryptMe.openExternal(SOURCE_URL)}>{t('sourceCode')}<ExternalLink size={13}/></button><button onClick={() => window.encryptMe.openExternal(LICENSE_URL)}>{t('license')}<ExternalLink size={13}/></button></div>
-          <div className="donation"><strong>{t('supportDevelopment')}</strong><span>{t('donationNetwork')}</span><code>{DONATION_ADDRESS}</code><small>{t('donationWarning')}</small><div><button onClick={() => void copyDonation()}><Copy size={14}/>{donationCopied ? t('copied') : t('copyAddress')}</button><button onClick={() => window.encryptMe.openExternal(DONATION_URL)}>{t('viewTronscan')}<ExternalLink size={13}/></button></div></div>
+          <div className="donation" ref={donationRef}><strong>{t('supportDevelopment')}</strong><span>{t('donationNetwork')}</span><code>{DONATION_ADDRESS}</code><small>{t('donationWarning')}</small><div><button onClick={() => void copyDonation()}><Copy size={14}/>{donationCopied ? t('copied') : t('copyAddress')}</button><button onClick={() => window.encryptMe.openExternal(DONATION_URL)}>{t('viewTronscan')}<ExternalLink size={13}/></button></div></div>
           <small className="copyright">© 2026 Ilya Levchenko</small>
         </div>
         <button className="primary settings-done" onClick={closeSettings}>{t('done')}</button>
