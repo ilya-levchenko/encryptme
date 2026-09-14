@@ -17,6 +17,7 @@ import { APP_VERSION, AUTHOR_EMAIL, DONATION_ADDRESS, DONATION_URL, LICENSE_URL,
 import { reminderContent } from './reminders';
 import { reminderSettingsView, reminderStartupUpdate } from './reminder-settings';
 import { ReminderDonationOption } from './reminder-donation-option';
+import { findActiveEntryForDate } from './diary-date';
 
 type Screen = 'loading' | 'setup' | 'login' | 'diary';
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -365,7 +366,7 @@ function Diary({ data, selectedDate, activeId, saveState, onDate, onActive, onCh
   }), [t]);
   const autoLockMs = normalizeAutoLockMs(data.settings?.autoLockMs);
   const dayEntries = useMemo(() => data.entries.filter(e => e.date === selectedDate).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)), [data.entries, selectedDate]);
-  const active = data.entries.find(e => e.id === activeId) || null;
+  const active = findActiveEntryForDate(data.entries, activeId, selectedDate);
   const filtered = useMemo(() => search.trim() ? data.entries.filter(e => `${e.title} ${plainText(e.content)}`.toLowerCase().includes(search.toLowerCase())).sort((a,b) => b.updatedAt.localeCompare(a.updatedAt)) : [], [data.entries, search]);
   const create = () => {
     const now = new Date().toISOString(); const entry: DiaryEntry = { id: uid(), date: selectedDate, title: '', content: '<p><br></p>', mood: 'none', createdAt: now, updatedAt: now };

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { blankVault, createSplitVault, decryptVault, deriveVaultKey, encryptVault, FAST_KDF, loadSplitEntry, openSplitVault, openSplitVaultWithKey, rekeySplitVault, updateSplitVault, usernameDigest } from './vault.mjs';
 
 describe('encrypted vault', () => {
@@ -29,6 +29,18 @@ describe('encrypted vault', () => {
     expect(blankVault('real', 'en').entries).toHaveLength(0);
     expect(blankVault('decoy', 'en').entries[0].title).toBe('Plans for the week');
     expect(blankVault('decoy', 'ru').entries[0].title).toBe('Планы на неделю');
+  });
+
+  it('assigns new samples to the local calendar day around midnight', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 14, 0, 30));
+    try {
+      const decoy = blankVault('decoy', 'ru');
+      expect(decoy.entries[0].date).toBe('2026-09-14');
+      expect(decoy.entries[1].date).toBe('2026-09-12');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens only the encrypted index and decrypts an entry on demand', async () => {

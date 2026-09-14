@@ -25,8 +25,14 @@ export const blankVault = (kind = 'real', locale = 'ru') => ({
 });
 
 function cryptoId() { return randomBytes(16).toString('hex'); }
-function today() { return new Date().toISOString().slice(0, 10); }
-function shiftDay(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+function localDateKey(value = new Date()) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+function today() { return localDateKey(); }
+function shiftDay(n) { const d = new Date(); d.setDate(d.getDate() + n); return localDateKey(d); }
 
 export function usernameDigest(username) {
   return createHash('sha256').update(username.trim().toLocaleLowerCase('ru')).digest('hex');
